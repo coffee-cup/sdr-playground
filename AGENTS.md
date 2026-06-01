@@ -23,7 +23,7 @@ not assume a system `cargo`. Run cargo only via these tasks:
 - `mise run fmt` — format
 - `mise run cli -- <args>` — run the headless `sdr` CLI (e.g. `mise run cli -- device list`)
 
-Do not run `mise run start` (it launches the GUI app) — that is for the user to run, not
+Do not run `mise run app` (it launches the GUI app) — that is for the user to run, not
 the agent. To verify a change, build and let the user run it.
 
 ## Code style
@@ -31,6 +31,7 @@ the agent. To verify a change, build and let the user run it.
 - Minimum effective abstraction. No layer of indirection without a caller that pays for it.
 - Comments explain **why** for a future senior engineer reading cold. No narration of the
   change, no restating what the code already says, nothing tied to this session.
+- Comments should NEVER include em-dashes
 - Match the style of the surrounding code.
 
 ## Workspace

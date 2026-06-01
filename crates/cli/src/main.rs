@@ -15,7 +15,9 @@ use std::time::Duration;
 use clap::{Args, Parser, Subcommand};
 use owo_colors::OwoColorize;
 
-use sdr_engine::{Engine, FileSource, Gain, RtlConfig, RtlSdrSource, Source};
+use sdr_engine::{
+    Engine, EngineConfig, FileSource, Gain, RtlConfig, RtlSdrSource, Source, SpectrumConfig,
+};
 
 #[derive(Parser)]
 #[command(
@@ -69,6 +71,9 @@ struct ListenArgs {
     /// Replay a raw cu8 IQ file instead of opening a device.
     #[arg(long)]
     file: Option<String>,
+    /// FFT size for the spectrum (samples).
+    #[arg(long, default_value_t = 8192)]
+    fft_size: usize,
 }
 
 fn main() -> ExitCode {
@@ -153,7 +158,14 @@ fn listen(args: ListenArgs) -> Result<(), String> {
     };
 
     header(args.freq, args.rate, &format::gain_label(args.gain));
-    run_live(Engine::start(source), args.rate);
+    let config = EngineConfig {
+        spectrum: SpectrumConfig {
+            fft_size: args.fft_size,
+            ..Default::default()
+        },
+        ..Default::default()
+    };
+    run_live(Engine::start(source, config), args.rate);
     Ok(())
 }
 
@@ -167,6 +179,9 @@ fn header(freq: u64, rate: u32, gain: &str) {
     println!("{}", "Ctrl-C to stop.".dimmed());
 }
 
+/// Columns in the ASCII spectrum sparkline.
+const SPECTRUM_WIDTH: usize = 80;
+
 fn run_live(engine: Engine, rate: u32) {
     let stop = Arc::new(AtomicBool::new(false));
     let handler_flag = Arc::clone(&stop);
@@ -175,6 +190,8 @@ fn run_live(engine: Engine, rate: u32) {
     let mut stdout = std::io::stdout();
     while !stop.load(Ordering::SeqCst) {
         let s = engine.snapshot();
+        let spec = engine.spectrum();
+
         // Throughput within 2% of the configured rate reads as healthy.
         let healthy = s.throughput_sps >= rate as f64 * 0.98;
         let tput = format::rate(s.throughput_sps as u32);
@@ -183,7 +200,7 @@ fn run_live(engine: Engine, rate: u32) {
         } else {
             tput.yellow().to_string()
         };
-        let line = format!(
+        let stats = format!(
             "{} {}  rx={}  pwr={}  peak={}",
             "[live]".dimmed(),
             tput,
@@ -191,9 +208,22 @@ fn run_live(engine: Engine, rate: u32) {
             format!("{} dBFS", format::db(s.mean_dbfs)).cyan(),
             format!("{} dBFS", format::db(s.peak_dbfs)).cyan(),
         );
-        // \r returns to column 0; \x1b[K clears to end of line.
-        print!("\r\x1b[K{line}");
-        let _ = stdout.flush();
+
+        let (spark, peak) = if spec.seq > 0 {
+            let bar = format::sparkline(&spec.bins_db, SPECTRUM_WIDTH);
+            (
+                format!(" {} {}", "spec".dimmed(), bar),
+                format::peak_readout(&spec.bins_db, spec.center_freq, spec.sample_rate),
+            )
+        } else {
+            (
+                format!(" {} {}", "spec".dimmed(), "acquiring…".dimmed()),
+                String::new(),
+            )
+        };
+        let peak = format!(" {} {}", "peak".dimmed(), peak.yellow());
+
+        redraw(&mut stdout, &[stats, spark, peak]);
 
         if !s.running {
             break;
@@ -203,10 +233,29 @@ fn run_live(engine: Engine, rate: u32) {
 
     let final_snapshot = engine.snapshot();
     engine.stop();
-    println!();
+    println!("\n");
     println!(
         "{} {} samples read.",
         "done:".bold(),
         format::count(final_snapshot.total_samples),
     );
+}
+
+/// Redraw a block of lines in place: clear each line, then park the cursor back on the first
+/// so the next call overwrites the same block.
+fn redraw(stdout: &mut impl Write, lines: &[String]) {
+    let mut out = String::from("\r");
+    for (i, line) in lines.iter().enumerate() {
+        if i > 0 {
+            out.push('\n');
+        }
+        out.push_str("\x1b[2K"); // clear entire line
+        out.push_str(line);
+    }
+    if lines.len() > 1 {
+        out.push_str(&format!("\x1b[{}A", lines.len() - 1)); // cursor up to the first line
+    }
+    out.push('\r');
+    let _ = stdout.write_all(out.as_bytes());
+    let _ = stdout.flush();
 }

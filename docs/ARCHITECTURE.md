@@ -60,6 +60,8 @@ This addresses a common failure mode in tools such as rtl_433, where a failed de
 
 The tap mechanism and the decoder input mechanism are the same subscription primitive. A stage exposes its output; the UI subscribes to observe it, and a decoder subscribes to consume it. One mechanism serves both cases.
 
+Concretely, a tap is a single-slot `Arc<ArcSwap<T>>`: the producer stores, a reader loads the latest. Scalar stats are a small `Copy` `Snapshot`; array-valued stages (the wideband `SpectrumFrame`, the time-domain `WaveformFrame`) carry a buffer behind the `Arc` and a monotonic `seq` so a reader can tell whether the frame advanced. The engine publishes all three; `app` reads them at frame rate and `cli` renders them headless.
+
 ---
 
 ## Source abstraction and record/replay
@@ -78,7 +80,7 @@ This makes the `Source` trait the most important boundary in the system. With it
 
 **Realtime core (dedicated threads, no async):**
 
-- A reader thread loops on `source.read()` and writes into the pre-trigger ring and the broadcast. A device source blocks on USB; a file source paces to real time.
+- A reader thread loops on `source.read()` and writes into the pre-trigger ring and the broadcast. A device source blocks on USB; a file source paces to real time. (Today the reader also computes the wideband FFT inline and publishes the spectrum/waveform taps directly: the FFT is the stream's only consumer, so the broadcast fan-out and DSP pool below are deferred until the first Channel needs them — adding them now would be indirection with no second consumer to pay for it.)
 - A DSP pool processes active channels as work units. Multi-core parallelism occurs here: multiple channels, or multiple decoders' compute, run on separate cores, while a single channel runs as straight-line code with no internal threading overhead.
 - The audio callback pulls mixed samples from a ring and must always have data available. The rest of the core exists to keep that ring full.
 

@@ -3,8 +3,11 @@ use gpui_component::{Root, Theme, ThemeMode, TitleBar};
 use gpui_component_assets::Assets;
 
 mod app;
+mod colormap;
 mod components;
 mod nav;
+mod radio;
+mod signal;
 mod workspaces;
 
 use app::SdrApp;
@@ -48,6 +51,8 @@ fn main() {
 
             cx.open_window(options, |window, cx| {
                 let view = cx.new(|cx| SdrApp::new(window, cx));
+                // Open the device and start streaming as soon as the window exists.
+                view.update(cx, |app, cx| app.connect(cx));
                 // The top-level view on a window must be a `Root`: it owns the overlay
                 // layers (dialogs, sheets, notifications) that gpui-component renders into.
                 cx.new(|cx| Root::new(view, window, cx))
