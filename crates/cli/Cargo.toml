@@ -1,0 +1,12 @@
+[package]
+name = "sdr-cli"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+
+[[bin]]
+name = "sdr"
+path = "src/main.rs"
+
+[dependencies]
+sdr-engine.workspace = true

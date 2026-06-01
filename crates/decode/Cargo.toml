@@ -1,0 +1,9 @@
+[package]
+name = "sdr-decode"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+
+[dependencies]
+sdr-core.workspace = true
+sdr-dsp.workspace = true

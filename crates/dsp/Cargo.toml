@@ -1,0 +1,8 @@
+[package]
+name = "sdr-dsp"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+
+[dependencies]
+sdr-core.workspace = true

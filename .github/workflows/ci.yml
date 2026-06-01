@@ -1,0 +1,28 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  ci:
+    # macOS so the full GPUI app builds with the same toolchain as local dev.
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # Provisions the Rust toolchain from mise.toml and exposes `mise run` tasks.
+      - uses: jdx/mise-action@v2
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Check (fmt + clippy)
+        run: mise run check
+
+      - name: Test
+        run: mise run test

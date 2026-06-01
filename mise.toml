@@ -1,0 +1,37 @@
+[tools]
+rust = "stable"
+
+# All workspace commands run through mise so the toolchain is consistent everywhere
+# (local + CI). Prefer `mise run <task>` over calling cargo directly.
+
+[tasks.build]
+description = "Build the whole workspace"
+run = "cargo build --workspace"
+
+[tasks.run]
+description = "Launch the app"
+run = "cargo run -p sdr-app"
+
+[tasks.test]
+description = "Run all tests"
+run = "cargo test --workspace"
+
+[tasks.fmt]
+description = "Format all code"
+run = "cargo fmt --all"
+
+[tasks.fmt-check]
+description = "Check formatting"
+run = "cargo fmt --all -- --check"
+
+[tasks.clippy]
+description = "Lint (warnings are errors)"
+run = "cargo clippy --workspace --all-targets -- -D warnings"
+
+[tasks.check]
+description = "CI gate: format check + clippy"
+depends = ["fmt-check", "clippy"]
+
+[tasks.ci]
+description = "Full CI: check + test"
+depends = ["check", "test"]

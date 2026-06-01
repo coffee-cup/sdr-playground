@@ -1,0 +1,11 @@
+[package]
+name = "sdr-engine"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+
+[dependencies]
+sdr-core.workspace = true
+sdr-dsp.workspace = true
+sdr-device.workspace = true
+sdr-decode.workspace = true

@@ -1,0 +1,39 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/core",
+    "crates/dsp",
+    "crates/device",
+    "crates/decode",
+    "crates/engine",
+    "crates/app",
+    "crates/cli",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[workspace.dependencies]
+# Internal crates. Dependency direction points inward (see docs/ARCHITECTURE.md):
+# core <- dsp/device/decode <- engine <- {app, cli}.
+sdr-core = { path = "crates/core" }
+sdr-dsp = { path = "crates/dsp" }
+sdr-device = { path = "crates/device" }
+sdr-decode = { path = "crates/decode" }
+sdr-engine = { path = "crates/engine" }
+
+# GPUI + gpui-component.
+#
+# gpui-component declares its `gpui` deps against zed's *default branch* (no rev). We must
+# use that same unpinned source here so cargo resolves a single gpui (a rev pin would not
+# unify with gpui-component's branch source, producing two incompatible copies). The exact
+# zed commit is pinned in Cargo.lock — kept at the commit gpui-component builds against
+# (its own Cargo.lock), currently 4bee412118dafea3bbd491cd044d354f16b3d665. To move it:
+#   cargo update -p gpui --precise <zed-sha>
+# Bump it together with the gpui-component rev below.
+gpui = { git = "https://github.com/zed-industries/zed" }
+gpui_platform = { git = "https://github.com/zed-industries/zed", features = ["font-kit"] }
+gpui-component = { git = "https://github.com/longbridge/gpui-component", rev = "6dfb32cd2c5e1bd6f86ce758398580f42d49970f" }
+gpui-component-assets = { git = "https://github.com/longbridge/gpui-component", rev = "6dfb32cd2c5e1bd6f86ce758398580f42d49970f" }
