@@ -162,19 +162,13 @@ fn median(bins: &[f32]) -> Option<f32> {
     Some(finite[finite.len() / 2])
 }
 
-/// Max-pool `bins` into `WF_COLS` columns and colormap each over `[floor, ceil]` → one BGRA row.
+/// Colormap `bins` into one BGRA row: each of `WF_COLS` columns is the peak dB over its bins,
+/// normalized across `[floor, ceil]`.
 fn make_row(bins: &[f32], floor: f32, ceil: f32, lut: &[[u8; 4]; 256]) -> Box<[u8]> {
-    let n = bins.len();
     let span = (ceil - floor).max(1.0);
     let mut row = vec![0u8; WF_COLS * 4];
     for c in 0..WF_COLS {
-        let start = c * n / WF_COLS;
-        let end = ((c + 1) * n / WF_COLS).clamp(start + 1, n);
-        let db = bins[start..end]
-            .iter()
-            .copied()
-            .fold(f32::NEG_INFINITY, f32::max);
-        let t = ((db - floor) / span).clamp(0.0, 1.0);
+        let t = ((column_db(bins, c, WF_COLS) - floor) / span).clamp(0.0, 1.0);
         let idx = ((t * 255.0) as usize).min(255);
         row[c * 4..c * 4 + 4].copy_from_slice(&lut[idx]);
     }
@@ -184,24 +178,12 @@ fn make_row(bins: &[f32], floor: f32, ceil: f32, lut: &[[u8; 4]; 256]) -> Box<[u
 fn spectrum_path(bins: &[f32], bounds: Bounds<Pixels>, range: (f32, f32)) -> Option<Path<Pixels>> {
     let (floor, ceil) = range;
     let span = (ceil - floor).max(1.0);
-    let n = bins.len();
-    let cols = (f32::from(bounds.size.width) as usize).max(2);
-    let (x0, y0, w, h) = (
-        f32::from(bounds.origin.x),
-        f32::from(bounds.origin.y),
-        f32::from(bounds.size.width),
-        f32::from(bounds.size.height),
-    );
+    let (x0, y0, w, h) = xywh(bounds);
+    let cols = (w as usize).max(2);
 
     let mut builder = PathBuilder::stroke(px(1.0));
     for c in 0..cols {
-        let start = c * n / cols;
-        let end = ((c + 1) * n / cols).clamp(start + 1, n);
-        let db = bins[start..end]
-            .iter()
-            .copied()
-            .fold(f32::NEG_INFINITY, f32::max);
-        let t = ((db - floor) / span).clamp(0.0, 1.0);
+        let t = ((column_db(bins, c, cols) - floor) / span).clamp(0.0, 1.0);
         let x = px(x0 + w * c as f32 / cols as f32);
         let y = px(y0 + h * (1.0 - t));
         if c == 0 {
@@ -215,12 +197,7 @@ fn spectrum_path(bins: &[f32], bounds: Bounds<Pixels>, range: (f32, f32)) -> Opt
 
 /// Horizontal dB gridlines at quarter-height intervals.
 fn paint_grid(window: &mut gpui::Window, bounds: Bounds<Pixels>, color: Hsla) {
-    let (x0, y0, w, h) = (
-        f32::from(bounds.origin.x),
-        f32::from(bounds.origin.y),
-        f32::from(bounds.size.width),
-        f32::from(bounds.size.height),
-    );
+    let (x0, y0, w, h) = xywh(bounds);
     for i in 1..4 {
         let y = px(y0 + h * i as f32 / 4.0);
         let mut builder = PathBuilder::stroke(px(1.0));
@@ -237,12 +214,7 @@ fn waveform_path(samples: &[sdr_engine::Iq], bounds: Bounds<Pixels>) -> Option<P
     if n < 2 {
         return None;
     }
-    let (x0, y0, w, h) = (
-        f32::from(bounds.origin.x),
-        f32::from(bounds.origin.y),
-        f32::from(bounds.size.width),
-        f32::from(bounds.size.height),
-    );
+    let (x0, y0, w, h) = xywh(bounds);
     let mut builder = PathBuilder::stroke(px(1.0));
     for (i, s) in samples.iter().enumerate() {
         // Real part in [-1, 1] → top..bottom.
@@ -256,6 +228,28 @@ fn waveform_path(samples: &[sdr_engine::Iq], bounds: Bounds<Pixels>) -> Option<P
         }
     }
     builder.build().ok()
+}
+
+/// Peak dB in column `c` of `cols`, max-pooled across the bins it spans so signals survive
+/// downsampling.
+fn column_db(bins: &[f32], c: usize, cols: usize) -> f32 {
+    let n = bins.len();
+    let start = c * n / cols;
+    let end = ((c + 1) * n / cols).clamp(start + 1, n);
+    bins[start..end]
+        .iter()
+        .copied()
+        .fold(f32::NEG_INFINITY, f32::max)
+}
+
+/// `bounds` as `(x, y, width, height)` in plain f32 for path arithmetic.
+fn xywh(bounds: Bounds<Pixels>) -> (f32, f32, f32, f32) {
+    (
+        f32::from(bounds.origin.x),
+        f32::from(bounds.origin.y),
+        f32::from(bounds.size.width),
+        f32::from(bounds.size.height),
+    )
 }
 
 #[cfg(test)]
