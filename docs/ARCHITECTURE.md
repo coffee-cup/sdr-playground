@@ -97,7 +97,7 @@ This layer does not use tokio. Async schedulers introduce nondeterministic wakeu
 
 A Cargo workspace with a strict dependency direction. Leaf crates are pure and IO-free, the two front-ends sit on top, and dependencies point inward. No core crate has knowledge of the UI.
 
-- **`core`**: shared types and traits. Sample types, the `Event` type, configuration, and the central traits (`Source`, `Demodulator`, `Decoder`, the tap/stage interface). No dependencies. All other crates depend on it.
+- **`core`**: shared types and traits. Sample types, the `Event` type, configuration, and the central traits (`Source`, `Demodulator`, `Decoder`, the tap/stage interface). Its only dependency is `num-complex`, which provides the `Complex<f32>` sample type (re-exported as `core::Iq`) that stays consistent across the stack; it is otherwise IO/async/UI-free. All other crates depend on it.
 - **`dsp`**: signal processing. FFT, filters, decimation, demodulators. No IO, hardware, or async. The most heavily unit-tested crate, since it is both the easiest to test in isolation and the easiest to get subtly wrong.
 - **`device`**: `Source` implementations. The RTL-SDR driver (hardware and USB), the file replay source, and the pre-trigger ring. The only crate that accesses hardware.
 - **`decode`**: decoder tails. Depends on `dsp` (decoders reuse filters and demodulators) and emits `core::Event` values. Tested against recorded fixtures.
@@ -119,16 +119,17 @@ core ←── dsp ←── decode ──┐
 
 ## Key traits
 
-These are interface sketches, not final signatures. They define the boundaries and will be refined in code.
+`Source` is implemented (in `core::source`); `Demodulator` and `Decoder` remain interface sketches that will be refined in code.
 
 ```rust
 // A producer of raw IQ. Live hardware and recorded files are peers.
-// Implemented over rtl-sdr-rs for the V3; a file source for replay/fixtures.
-trait Source {
+// Implemented over rtl-sdr-rs (RtlSdrSource) for the V3; FileSource for replay/fixtures.
+// `Send` so the engine can own it on a dedicated reader thread.
+trait Source: Send {
     fn sample_rate(&self) -> u32;
     fn center_freq(&self) -> u64;
-    fn tune(&mut self, hz: u64) -> Result<()>;          // file source: seek or no-op
-    fn read(&mut self, out: &mut [Complex<f32>]) -> Result<usize>;
+    fn tune(&mut self, hz: u64) -> Result<()>;          // file source: updates reported freq
+    fn read(&mut self, out: &mut [Iq]) -> Result<usize>; // Ok(0) = end of stream (EOF)
 }
 
 // Baseband IQ in, audio out. AM/FM/SSB are implementations.
@@ -178,7 +179,7 @@ The UI reads tap snapshots at frame rate and does not reach into the signal path
 
 The division is deliberate: buy the plumbing, build the signal processing. Hardware access and the FFT are solved problems with no learning value in reimplementation. Everything between samples and meaning is the substance of the project and is written by hand.
 
-**Buy, device layer.** `rtl-sdr-rs` (the ccostes crate), behind the `device` crate's `Source` implementation. It is a pure-Rust RTL-SDR driver with no system-library dependency, so it compiles on macOS with nothing to install; it is currently maintained; and the V3 is its well-supported target. Because everything downstream sits behind the `Source` trait, changing drivers is a single-crate change. `soapysdr` is the documented fallback for multi-radio support: it is the mature, vendor-neutral standard, at the cost of requiring system libraries and carrying known driver-level thread-safety issues. The flowgraph frameworks in this space (FutureSDR, rustradio) are excluded as dependencies, because they would own the concurrency model and channel abstraction defined here. They are useful as references.
+**Buy, device layer.** `rtl-sdr-rs` (the ccostes crate), behind the `device` crate's `Source` implementation. It is a pure-Rust RTL-SDR driver layered on `rusb`/libusb; the `device` crate enables `rusb`'s `vendored` feature (default-on), which statically compiles libusb into the binary. The shipped binary therefore needs no system library installed at runtime — the app is standalone and works without `sudo` on macOS (the RTL bulk interface is vendor-specific, with no kernel driver to detach); libusb compiling from source is a build-time concern only. The crate is currently maintained, and the V3 is its well-supported target. Because everything downstream sits behind the `Source` trait, changing drivers is a single-crate change. `soapysdr` is the documented fallback for multi-radio support: it is the mature, vendor-neutral standard, at the cost of requiring system libraries and carrying known driver-level thread-safety issues. The flowgraph frameworks in this space (FutureSDR, rustradio) are excluded as dependencies, because they would own the concurrency model and channel abstraction defined here. They are useful as references.
 
 **Buy, FFT.** `rustfft` (auto-detects AVX/SSE/NEON, supports any size, O(n log n)) with `num-complex` for the sample type. Since rustfft re-exports num-complex, the type is consistent across the stack without conversion. `realfft` is optional, for the real-input spectrum path. This is the complete math-dependency list.
 
@@ -190,6 +191,6 @@ The division is deliberate: buy the plumbing, build the signal processing. Hardw
 
 The following are deliberately unsettled, to be resolved in code or a later document.
 
-- **Recording file format.** SigMF (raw samples plus a JSON metadata sidecar) is the current preference: it is the community standard, it is interoperable with other tools, and its annotation support can hold expected-event metadata for golden fixtures. The simpler alternative is plain interleaved `cf32`/`cu8` with a minimal header. This should be decided before fixtures accumulate, since migrating them later is costly.
+- **Recording file format.** SigMF (raw samples plus a JSON metadata sidecar) is the current preference: it is the community standard, it is interoperable with other tools, and its annotation support can hold expected-event metadata for golden fixtures. The simpler alternative is plain interleaved `cf32`/`cu8` with a minimal header. This should be decided before fixtures accumulate, since migrating them later is costly. Until then, `FileSource` reads headerless raw interleaved `cu8` (the RTL native format), with sample rate and center frequency supplied by the caller.
 - **Decoder input typing.** A single tagged `Samples` enum versus per-kind traits (see Key traits).
 - **Channel scheduling.** Whether the DSP pool is a work-stealing pool (rayon-style) or hand-rolled. Settle this against a measured multi-channel load.

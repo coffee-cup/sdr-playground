@@ -9,4 +9,7 @@ name = "sdr"
 path = "src/main.rs"
 
 [dependencies]
+clap = { version = "4.6.1", features = ["derive", "color"] }
+ctrlc = "3.5.2"
+owo-colors = "4.3.0"
 sdr-engine.workspace = true

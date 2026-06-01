@@ -8,9 +8,14 @@ rust = "stable"
 description = "Build the whole workspace"
 run = "cargo build --workspace"
 
-[tasks.run]
-description = "Launch the app"
+[tasks.start]
+description = "Launch the GUI app"
 run = "cargo run -p sdr-app"
+
+# Forward args after `--`, e.g. `mise run cli -- listen --freq 100M` or `mise run cli -- device list`.
+[tasks.cli]
+description = "Run the headless CLI (pass args after --)"
+run = "cargo run -q -p sdr-cli --"
 
 [tasks.test]
 description = "Run all tests"
