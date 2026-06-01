@@ -1,5 +1,5 @@
 use gpui::*;
-use gpui_component::ActiveTheme;
+use gpui_component::{ActiveTheme, Icon, IconName};
 
 use crate::app::SdrApp;
 
@@ -21,7 +21,15 @@ impl Workspace {
         Workspace::Settings,
     ];
 
-    /// Stable element id / unique label for the nav item.
+    pub fn title(self) -> &'static str {
+        match self {
+            Workspace::Listen => "Listen",
+            Workspace::Library => "Library",
+            Workspace::Recordings => "Recordings",
+            Workspace::Settings => "Settings",
+        }
+    }
+
     fn id(self) -> &'static str {
         match self {
             Workspace::Listen => "listen",
@@ -31,50 +39,58 @@ impl Workspace {
         }
     }
 
-    /// Placeholder glyph until real icons are wired (see `docs/UI.md` nav rail).
-    fn glyph(self) -> &'static str {
+    fn icon(self) -> IconName {
         match self {
-            Workspace::Listen => "◉",
-            Workspace::Library => "▤",
-            Workspace::Recordings => "⧉",
-            Workspace::Settings => "⊚",
+            Workspace::Listen => IconName::Frame,
+            Workspace::Library => IconName::BookOpen,
+            Workspace::Recordings => IconName::HardDrive,
+            Workspace::Settings => IconName::Settings,
         }
     }
 }
 
 /// The nav rail: a narrow always-visible icon column that switches the top-level
-/// workspace. It never holds content itself.
+/// workspace. The active item gets a subtle raised fill and a left accent edge.
 pub fn render(active: Workspace, cx: &mut Context<SdrApp>) -> impl IntoElement {
     let border = cx.theme().border;
     let foreground = cx.theme().foreground;
     let muted = cx.theme().muted_foreground;
-    let selected_bg = cx.theme().secondary;
+    let raised = cx.theme().secondary;
+    let accent = cx.theme().primary;
 
     div()
         .flex()
         .flex_col()
         .items_center()
-        .gap_2()
-        .w(px(56.))
+        .gap_1()
+        .w(px(48.))
         .h_full()
-        .py_3()
+        .py_2()
         .border_r_1()
         .border_color(border)
         .children(Workspace::ALL.map(|ws| {
             let is_active = ws == active;
-            let mut item = div()
+            let mut cell = div()
                 .id(ws.id())
+                .relative()
                 .flex()
                 .items_center()
                 .justify_center()
                 .size(px(36.))
-                .rounded_md()
                 .cursor_pointer()
                 .text_color(if is_active { foreground } else { muted })
-                .child(ws.glyph());
+                .child(Icon::new(ws.icon()).size_4());
             if is_active {
-                item = item.bg(selected_bg);
+                cell = cell.bg(raised).child(
+                    div()
+                        .absolute()
+                        .left_0()
+                        .top(px(6.))
+                        .bottom(px(6.))
+                        .w(px(2.))
+                        .bg(accent),
+                );
             }
-            item.on_click(cx.listener(move |this, _, _, cx| this.activate(ws, cx)))
+            cell.on_click(cx.listener(move |this, _, _, cx| this.activate(ws, cx)))
         }))
 }

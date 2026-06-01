@@ -1,120 +1,72 @@
+use gpui::prelude::FluentBuilder;
 use gpui::*;
+use gpui_component::resizable::{h_resizable, resizable_panel, v_resizable};
 use gpui_component::ActiveTheme;
 
 use crate::app::SdrApp;
 
-/// The live operating view. Stacks the top status bar over a row of
-/// [center signal display | inspect panel], with the tabbed working pane beneath.
-/// Arrangement and region responsibilities are defined in `docs/UI.md`. All regions
-/// are static placeholders; nothing reads the radio yet.
-pub fn render(_window: &mut Window, cx: &mut Context<SdrApp>) -> impl IntoElement {
+/// The live operating view, laid out with resizable splitters (see `docs/UI.md`):
+/// a top row of [center signal display | inspect panel] over a bottom working pane;
+/// the center itself splits spectrum over waterfall. All regions are static
+/// placeholders; nothing reads the radio yet.
+pub fn render(cx: &mut Context<SdrApp>) -> impl IntoElement {
+    v_resizable("sdr.listen.rows")
+        .child(
+            resizable_panel().child(
+                h_resizable("sdr.listen.cols")
+                    .child(resizable_panel().child(center(cx)))
+                    .child(resizable_panel().size(px(300.)).child(inspect(cx))),
+            ),
+        )
+        .child(resizable_panel().size(px(190.)).child(bottom_pane(cx)))
+}
+
+/// Center signal display: the frequency-domain spectrum over the waterfall.
+fn center(cx: &mut Context<SdrApp>) -> impl IntoElement {
+    v_resizable("sdr.listen.center")
+        .child(
+            resizable_panel()
+                .size(px(200.))
+                .child(surface("Spectrum", cx)),
+        )
+        .child(resizable_panel().child(surface("Waterfall", cx)))
+}
+
+/// A flat panel with a small section header and an empty body where the signal render
+/// will live.
+fn surface(label: &'static str, cx: &mut Context<SdrApp>) -> impl IntoElement {
     div()
         .flex()
         .flex_col()
         .size_full()
-        .child(top_bar(cx))
-        .child(
-            div()
-                .flex()
-                .flex_row()
-                .flex_1()
-                .overflow_hidden()
-                .child(center(cx))
-                .child(inspect(cx)),
-        )
-        .child(bottom_pane(cx))
+        .child(panel_header(label, cx))
+        .child(div().flex_1())
 }
 
-/// Read-only status line for the active channel, with the command-palette entry on the right.
-fn top_bar(cx: &mut Context<SdrApp>) -> impl IntoElement {
-    let border = cx.theme().border;
-    let muted = cx.theme().muted_foreground;
-
-    div()
-        .flex()
-        .flex_row()
-        .items_center()
-        .justify_between()
-        .w_full()
-        .h(px(40.))
-        .px_4()
-        .border_b_1()
-        .border_color(border)
-        .child(
-            div()
-                .flex()
-                .flex_row()
-                .gap_4()
-                .child(div().font_weight(FontWeight::MEDIUM).child("133.700 MHz"))
-                .child(div().text_color(muted).child("AM"))
-                .child(div().text_color(muted).child("bw 12k"))
-                .child(div().text_color(muted).child("gain 28")),
-        )
-        .child(div().text_color(muted).child("⌘K"))
-}
-
-/// Center signal display: the frequency-domain spectrum stacked over the waterfall.
-/// The splitter between them (and the canvas rendering) come later.
-fn center(cx: &mut Context<SdrApp>) -> impl IntoElement {
-    let muted = cx.theme().muted_foreground;
-    let panel = cx.theme().muted;
-
-    div()
-        .flex()
-        .flex_col()
-        .flex_1()
-        .gap_px()
-        .p_2()
-        .child(
-            div()
-                .flex()
-                .items_center()
-                .justify_center()
-                .h(px(140.))
-                .rounded_md()
-                .bg(panel)
-                .text_color(muted)
-                .child("▁▂▃▅▇ spectrum (FFT) ▇▅▃▂▁"),
-        )
-        .child(
-            div()
-                .flex()
-                .items_center()
-                .justify_center()
-                .flex_1()
-                .rounded_md()
-                .bg(panel)
-                .text_color(muted)
-                .child("waterfall"),
-        )
-}
-
-/// Right-hand observability surface: the selected stage's output plus Tune controls.
+/// Right-hand observability surface: the selected stage's readouts plus Tune controls.
 fn inspect(cx: &mut Context<SdrApp>) -> impl IntoElement {
     let border = cx.theme().border;
-    let muted = cx.theme().muted_foreground;
 
     div()
         .flex()
         .flex_col()
-        .gap_3()
-        .w(px(240.))
-        .h_full()
-        .p_3()
+        .size_full()
         .border_l_1()
         .border_color(border)
-        .child(div().font_weight(FontWeight::MEDIUM).child("INSPECT"))
-        .child(div().text_sm().text_color(muted).child("stage: demod"))
-        .child(div().text_sm().text_color(muted).child("∿ waveform"))
-        .child(div().text_sm().text_color(muted).child("SNR    18 dB"))
-        .child(div().text_sm().text_color(muted).child("bw     12 kHz"))
-        .child(div().mt_2().font_weight(FontWeight::MEDIUM).child("TUNE"))
-        .child(div().text_sm().text_color(muted).child("freq · mode"))
+        .child(panel_header("Inspect", cx))
         .child(
             div()
-                .text_sm()
-                .text_color(muted)
-                .child("bw · gain · squelch"),
+                .flex()
+                .flex_col()
+                .gap_2()
+                .p_3()
+                .child(kv("Stage", "demod", cx))
+                .child(kv("SNR", "18 dB", cx))
+                .child(kv("BW", "12 kHz", cx))
+                .child(section("Tune", cx))
+                .child(kv("Freq", "133.700 MHz", cx))
+                .child(kv("Mode", "AM", cx))
+                .child(kv("Gain", "28", cx)),
         )
 }
 
@@ -123,32 +75,29 @@ fn inspect(cx: &mut Context<SdrApp>) -> impl IntoElement {
 fn bottom_pane(cx: &mut Context<SdrApp>) -> impl IntoElement {
     let border = cx.theme().border;
     let muted = cx.theme().muted_foreground;
-    let foreground = cx.theme().foreground;
+    let mono = cx.theme().mono_font_family.clone();
 
     let tabs = ["Decoder", "Events", "Channels"];
 
     div()
         .flex()
         .flex_col()
-        .h(px(160.))
+        .size_full()
         .border_t_1()
         .border_color(border)
         .child(
             div()
                 .flex()
                 .flex_row()
-                .gap_4()
-                .px_4()
-                .h(px(34.))
+                .h(px(28.))
                 .items_center()
                 .border_b_1()
                 .border_color(border)
-                .children(tabs.iter().enumerate().map(|(i, label)| {
-                    div()
-                        .text_sm()
-                        .text_color(if i == 0 { foreground } else { muted })
-                        .child(*label)
-                })),
+                .children(
+                    tabs.into_iter()
+                        .enumerate()
+                        .map(|(i, label)| tab(label, i == 0, cx)),
+                ),
         )
         .child(
             div()
@@ -156,10 +105,74 @@ fn bottom_pane(cx: &mut Context<SdrApp>) -> impl IntoElement {
                 .flex_col()
                 .gap_1()
                 .p_3()
-                .text_sm()
+                .font_family(mono)
+                .text_xs()
                 .text_color(muted)
-                .child("AC123   39000ft   hdg 270        ADS-B")
-                .child("pager: \"call ext 4471\"           POCSAG")
-                .child("Acurite 0x3f   21.4°C   58%RH    433"),
+                .child("AC123      39000 ft   hdg 270        ADS-B")
+                .child("\"call ext 4471\"                      POCSAG")
+                .child("Acurite 0x3f   21.4 C   58 %RH        433"),
         )
+}
+
+/// A bottom-pane tab. Active tab is foreground with a raised fill and an accent underline.
+fn tab(label: &'static str, active: bool, cx: &mut Context<SdrApp>) -> impl IntoElement {
+    let foreground = cx.theme().foreground;
+    let muted = cx.theme().muted_foreground;
+    let raised = cx.theme().secondary;
+    let accent = cx.theme().primary;
+
+    div()
+        .flex()
+        .items_center()
+        .h_full()
+        .px_3()
+        .text_xs()
+        .border_b_2()
+        .border_color(if active {
+            accent
+        } else {
+            gpui::transparent_black()
+        })
+        .when(active, |this| this.bg(raised))
+        .text_color(if active { foreground } else { muted })
+        .child(label)
+}
+
+/// A small section header used as the top strip of a panel.
+fn panel_header(label: &'static str, cx: &mut Context<SdrApp>) -> impl IntoElement {
+    let muted = cx.theme().muted_foreground;
+    let border = cx.theme().border;
+
+    div()
+        .flex()
+        .items_center()
+        .h(px(24.))
+        .px_2()
+        .border_b_1()
+        .border_color(border)
+        .text_xs()
+        .text_color(muted)
+        .child(label)
+}
+
+/// An inline section divider/label inside the inspect panel.
+fn section(label: &'static str, cx: &mut Context<SdrApp>) -> impl IntoElement {
+    let muted = cx.theme().muted_foreground;
+
+    div().pt_2().text_xs().text_color(muted).child(label)
+}
+
+/// A label/value row: muted key on the left, foreground value on the right.
+fn kv(key: &'static str, value: &'static str, cx: &mut Context<SdrApp>) -> impl IntoElement {
+    let foreground = cx.theme().foreground;
+    let muted = cx.theme().muted_foreground;
+    let mono = cx.theme().mono_font_family.clone();
+
+    div()
+        .flex()
+        .flex_row()
+        .justify_between()
+        .text_xs()
+        .child(div().text_color(muted).child(key))
+        .child(div().font_family(mono).text_color(foreground).child(value))
 }

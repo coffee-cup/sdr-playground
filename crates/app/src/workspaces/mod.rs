@@ -17,6 +17,7 @@ pub(crate) fn placeholder(
     subtitle: &'static str,
     cx: &mut Context<SdrApp>,
 ) -> impl IntoElement {
+    let foreground = cx.theme().foreground;
     let muted = cx.theme().muted_foreground;
 
     div()
@@ -26,6 +27,6 @@ pub(crate) fn placeholder(
         .justify_center()
         .gap_2()
         .size_full()
-        .child(div().text_lg().child(title))
-        .child(div().text_sm().text_color(muted).child(subtitle))
+        .child(div().text_sm().text_color(foreground).child(title))
+        .child(div().text_xs().text_color(muted).child(subtitle))
 }

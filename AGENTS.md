@@ -18,10 +18,12 @@ Everything runs through mise — the Rust toolchain is provisioned by `mise.toml
 not assume a system `cargo`. Run cargo only via these tasks:
 
 - `mise run build` — build the workspace
-- `mise run run` — launch the app
 - `mise run test` — tests
 - `mise run check` — fmt check + clippy (the CI gate; run before committing)
 - `mise run fmt` — format
+
+Do not run `mise run run` (it launches the GUI app) — that is for the user to run, not
+the agent. To verify a change, build and let the user run it.
 
 ## Code style
 
