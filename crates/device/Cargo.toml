@@ -5,4 +5,13 @@ edition.workspace = true
 publish.workspace = true
 
 [dependencies]
+rtl-sdr-rs = "0.3.3"
+rusb = { version = "0.9.4", features = ["vendored"], optional = true }
 sdr-core.workspace = true
+
+# `vendored` (default) compiles libusb from source and statically links it, so the shipped
+# binary needs no system libusb install. Pulling `rusb` in directly with the feature flips
+# `libusb1-sys/vendored` on the same `rusb` that `rtl-sdr-rs` uses (cargo unifies it).
+[features]
+default = ["vendored"]
+vendored = ["dep:rusb"]

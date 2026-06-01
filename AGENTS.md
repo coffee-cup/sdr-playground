@@ -21,8 +21,9 @@ not assume a system `cargo`. Run cargo only via these tasks:
 - `mise run test` — tests
 - `mise run check` — fmt check + clippy (the CI gate; run before committing)
 - `mise run fmt` — format
+- `mise run cli -- <args>` — run the headless `sdr` CLI (e.g. `mise run cli -- device list`)
 
-Do not run `mise run run` (it launches the GUI app) — that is for the user to run, not
+Do not run `mise run start` (it launches the GUI app) — that is for the user to run, not
 the agent. To verify a change, build and let the user run it.
 
 ## Code style
