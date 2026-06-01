@@ -8,10 +8,11 @@ use sdr_core::{Error, Iq, Result, Source};
 
 use crate::convert;
 
-/// USB bulk transfer granularity. Reads sized to a multiple of this stream most efficiently.
-pub const USB_CHUNK: usize = 16384;
+/// RTL-SDR USB bulk transfer granularity, in bytes. Reads that are a multiple of it stream
+/// most efficiently.
+const USB_CHUNK: usize = 16384;
 
-/// A sensible default read size: two USB chunks worth of complex samples.
+/// Default read size, in complex samples. At 2 bytes/sample this spans two USB transfers.
 pub const DEFAULT_READ_SAMPLES: usize = USB_CHUNK;
 
 /// Tuner gain setting.

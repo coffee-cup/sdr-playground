@@ -15,7 +15,7 @@ use std::time::Duration;
 use clap::{Args, Parser, Subcommand};
 use owo_colors::OwoColorize;
 
-use sdr_engine::{Engine, FileSource, Gain, RtlConfig, RtlSdrSource};
+use sdr_engine::{Engine, FileSource, Gain, RtlConfig, RtlSdrSource, Source};
 
 #[derive(Parser)]
 #[command(
@@ -131,11 +131,10 @@ fn field(label: &str, value: &str) {
 }
 
 fn listen(args: ListenArgs) -> Result<(), String> {
-    let engine = if let Some(path) = &args.file {
+    let source: Box<dyn Source> = if let Some(path) = &args.file {
         let source = FileSource::open_cu8(path, args.rate, args.freq).map_err(|e| e.to_string())?;
         println!("{} {}", "replaying".bold(), path.bold());
-        header(args.freq, args.rate, &format::gain_label(args.gain));
-        Engine::start(Box::new(source))
+        Box::new(source)
     } else {
         let cfg = RtlConfig {
             freq_hz: args.freq,
@@ -143,18 +142,18 @@ fn listen(args: ListenArgs) -> Result<(), String> {
             gain: args.gain,
         };
         let source = RtlSdrSource::open(args.index, cfg).map_err(|e| e.to_string())?;
-        let info = source.info().clone();
+        let info = source.info();
         println!(
             "{}  tuner={}  {}",
             info.name.bold(),
             info.tuner.as_deref().unwrap_or("unknown").bold(),
             format!("serial {}", info.serial).dimmed(),
         );
-        header(args.freq, args.rate, &format::gain_label(args.gain));
-        Engine::start(Box::new(source))
+        Box::new(source)
     };
 
-    run_live(engine, args.rate);
+    header(args.freq, args.rate, &format::gain_label(args.gain));
+    run_live(Engine::start(source), args.rate);
     Ok(())
 }
 

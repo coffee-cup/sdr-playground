@@ -14,12 +14,12 @@ use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
 use arc_swap::ArcSwap;
-use sdr_core::Source;
 use sdr_device::rtlsdr::DEFAULT_READ_SAMPLES;
 
 pub use snapshot::Snapshot;
 
 // Re-exported so front-ends that depend only on `engine` can construct sources to inject.
+pub use sdr_core::Source;
 pub use sdr_device::{DeviceInfo, FileSource, Gain, RtlConfig, RtlSdrSource};
 
 /// How often the reader thread publishes a fresh snapshot (~20 Hz).
