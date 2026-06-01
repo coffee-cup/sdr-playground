@@ -24,6 +24,14 @@ sdr-device = { path = "crates/device" }
 sdr-decode = { path = "crates/decode" }
 sdr-engine = { path = "crates/engine" }
 
+# DSP. rustfft re-exports num-complex 0.4, the same `Complex<f32>` as `core::Iq`, so the
+# sample type stays consistent across the stack with no conversion.
+rustfft = "6.4"
+
+# Used by the app to build the waterfall texture (RenderImage wraps image::Frame). Pinned to
+# the versions gpui resolves so the Frame type unifies.
+image = "0.25"
+
 # GPUI + gpui-component.
 #
 # gpui-component declares its `gpui` deps against zed's *default branch* (no rev). We must

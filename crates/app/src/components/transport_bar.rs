@@ -5,8 +5,9 @@ use crate::app::SdrApp;
 
 /// Full-width strip for record and replay, present in every workspace so recording is
 /// always one action away: transport controls, the DVR buffer scrubber, buffer depth,
-/// record state, and sample rate (see `docs/UI.md`). Static placeholder for now.
-pub fn render(cx: &mut Context<SdrApp>) -> impl IntoElement {
+/// record state, and sample rate (see `docs/UI.md`). Play/pause freezes the live display;
+/// the rest is a static placeholder for now.
+pub fn render(app: &SdrApp, cx: &mut Context<SdrApp>) -> impl IntoElement {
     let background = cx.theme().background;
     let border = cx.theme().border;
     let foreground = cx.theme().foreground;
@@ -14,6 +15,15 @@ pub fn render(cx: &mut Context<SdrApp>) -> impl IntoElement {
     let track = cx.theme().secondary;
     let record = cx.theme().danger;
     let mono = cx.theme().mono_font_family.clone();
+
+    let running = app.radio().engine().is_some();
+    // Paused shows Play (resume); live shows Pause (freeze).
+    let play_icon = if app.paused() {
+        IconName::Play
+    } else {
+        IconName::Pause
+    };
+    let play_color = if running { foreground } else { muted };
 
     div()
         .flex()
@@ -36,7 +46,13 @@ pub fn render(cx: &mut Context<SdrApp>) -> impl IntoElement {
                 .flex_row()
                 .items_center()
                 .gap_3()
-                .child(Icon::new(IconName::Play).size_4().text_color(foreground))
+                .child(
+                    div()
+                        .id("transport-play")
+                        .cursor_pointer()
+                        .child(Icon::new(play_icon).size_4().text_color(play_color))
+                        .on_click(cx.listener(|app, _, _, cx| app.toggle_pause(cx))),
+                )
                 .child(div().size(px(9.)).bg(muted))
                 .child(
                     div()

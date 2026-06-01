@@ -8,7 +8,7 @@ rust = "stable"
 description = "Build the whole workspace"
 run = "cargo build --workspace"
 
-[tasks.start]
+[tasks.app]
 description = "Launch the GUI app"
 run = "cargo run -p sdr-app"
 

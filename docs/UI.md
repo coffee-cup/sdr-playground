@@ -39,7 +39,7 @@ A fixed arrangement: a nav rail on the far left, a primary signal display in the
 
 **Top bar.** A single status line for the active channel: frequency, mode, bandwidth, gain, and device state, with the command palette entry point (Cmd-K) at the right. Read-only display; editing happens in the Tune section of the inspect panel or through the palette.
 
-**Primary signal display (center).** The largest region and the focus of the app. It stacks the frequency-domain spectrum (FFT line) above the waterfall (spectrogram over time), with a draggable splitter between them so the user sets the ratio. The time-domain waveform is also a primary display and can be promoted into the center (replacing or splitting with the waterfall); by default it appears smaller in the inspect panel. Waterfall and waveform are the two displays that define the app, so both are reachable without leaving the Listen workspace.
+**Primary signal display (center).** The largest region and the focus of the app. It stacks the frequency-domain spectrum (FFT line) above the waterfall (spectrogram over time), with a draggable splitter between them so the user sets the ratio. The spectrum and waterfall share one dB scale that auto-tracks the noise floor, so the display stays readable across gain settings without a manual min/max control; the waterfall scrolls newest-on-top through a perceptual colormap. The time-domain waveform is also a primary display and can be promoted into the center (replacing or splitting with the waterfall); by default it appears smaller in the inspect panel. Waterfall and waveform are the two displays that define the app, so both are reachable without leaving the Listen workspace.
 
 **Inspect panel (right).** The observability surface. It shows the output of a selected pipeline stage (raw IQ, baseband, demodulated waveform, recovered bits) plus derived readouts (SNR, bandwidth, symbol rate), and it holds the Tune controls. This panel is what makes a failed decode diagnosable rather than silent, so it is permanent rather than a modal. Collapsible when the user wants maximum display area.
 
@@ -51,7 +51,7 @@ A fixed arrangement: a nav rail on the far left, a primary signal display in the
 
 The bottom pane is resizable and collapsible. Tabs were chosen over a fixed split to conserve vertical space for the signal display; a side-by-side split is noted as an alternative below.
 
-**Transport bar.** A full-width strip for record and replay: transport controls, the DVR buffer scrubber with a position marker, the buffer depth readout, the record toggle, and the audio sample rate. Present in every workspace so recording is always one action away.
+**Transport bar.** A full-width strip for record and replay: transport controls, the DVR buffer scrubber with a position marker, the buffer depth readout, the record toggle, and the audio sample rate. Present in every workspace so recording is always one action away. Play/pause currently freezes and resumes the live display (the device keeps streaming); the DVR controls are not yet wired.
 
 ---
 

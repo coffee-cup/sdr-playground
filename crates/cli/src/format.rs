@@ -89,3 +89,60 @@ pub fn db(value: f32) -> String {
         "-inf".to_string()
     }
 }
+
+/// Unicode block ramp for the spectrum sparkline, low → high (first is a space for the floor).
+const BLOCKS: [char; 9] = [' ', '▁', '▂', '▃', '▄', '▅', '▆', '▇', '█'];
+
+/// Render a fftshifted dBFS spectrum as a `width`-column sparkline. Bins are max-pooled per
+/// column (peaks survive downsampling). The dB scale auto-ranges per frame — floor at the
+/// median (the noise sits at the bottom), ceil at the max — so signals pop at any gain.
+pub fn sparkline(bins: &[f32], width: usize) -> String {
+    let n = bins.len();
+    if n == 0 || width == 0 {
+        return String::new();
+    }
+
+    let mut finite: Vec<f32> = bins.iter().copied().filter(|d| d.is_finite()).collect();
+    if finite.is_empty() {
+        return " ".repeat(width);
+    }
+    finite.sort_unstable_by(|a, b| a.partial_cmp(b).unwrap());
+    let floor = finite[finite.len() / 2]; // median ≈ noise floor
+    let ceil = *finite.last().unwrap();
+    let span = (ceil - floor).max(1.0);
+
+    (0..width)
+        .map(|c| {
+            let start = c * n / width;
+            let end = ((c + 1) * n / width).clamp(start + 1, n);
+            let db = bins[start..end]
+                .iter()
+                .copied()
+                .fold(f32::NEG_INFINITY, f32::max);
+            let t = ((db - floor) / span).clamp(0.0, 1.0);
+            BLOCKS[(t * (BLOCKS.len() - 1) as f32).round() as usize]
+        })
+        .collect()
+}
+
+/// A human readout of the strongest bin: absolute frequency, signed offset from center, dB.
+pub fn peak_readout(bins: &[f32], center_freq: u64, sample_rate: u32) -> String {
+    let n = bins.len();
+    let Some((bin, &peak_db)) = bins
+        .iter()
+        .enumerate()
+        .max_by(|a, b| a.1.partial_cmp(b.1).unwrap())
+    else {
+        return String::new();
+    };
+    let offset_hz = (bin as i64 - n as i64 / 2) * sample_rate as i64 / n as i64;
+    let abs = (center_freq as i64 + offset_hz).max(0) as u64;
+    let sign = if offset_hz < 0 { "-" } else { "+" };
+    format!(
+        "{}  ({}{})  {} dBFS",
+        freq(abs),
+        sign,
+        freq(offset_hz.unsigned_abs()),
+        db(peak_db),
+    )
+}
