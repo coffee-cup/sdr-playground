@@ -4,7 +4,9 @@
 
 use std::sync::OnceLock;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+use serde::{Deserialize, Serialize};
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 pub enum Colormap {
     /// gqrx's classic waterfall palette: black → blue → cyan → yellow → red → white.
     #[default]

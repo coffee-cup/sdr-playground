@@ -1,0 +1,187 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>SDR · Monospace</title>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet" />
+<style>
+  :root {
+    --bg: #0d0c0a;
+    --panel: #131210;
+    --panel-2: #181612;
+    --edge: #262320;
+    --edge-soft: #1d1b18;
+    --txt: #e4ddd0;
+    --txt-2: #9a9486;
+    --txt-3: #6a6458;
+    --amber: #e9a23c;
+    --teal: #6fb6a6;
+    --rose: #d4756b;
+    --mono: "JetBrains Mono", ui-monospace, "SF Mono", Menlo, monospace;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body { height: 100%; }
+  body { font-family: var(--mono); background: var(--bg); color: var(--txt); font-size: 12.5px; overflow: hidden; -webkit-font-smoothing: antialiased; }
+  .app { display: grid; grid-template-rows: 36px 1fr 38px; height: 100vh; }
+
+  .titlebar { display: flex; align-items: center; gap: 16px; padding: 0 12px; border-bottom: 1px solid var(--edge-soft); }
+  .nowfreq { color: var(--amber); font-size: 13px; font-variant-numeric: tabular-nums; }
+  .nowfreq .u { color: var(--txt-3); }
+  .status { display: flex; gap: 14px; color: var(--txt-2); font-size: 12px; }
+  .status b { color: var(--txt); }
+  .spacer { flex: 1; }
+  .search { display: flex; align-items: center; gap: 8px; width: 260px; height: 24px; padding: 0 9px; border: 1px solid var(--edge); background: var(--panel-2); color: var(--txt-3); }
+  .search svg { width: 13px; height: 13px; }
+  .search input { flex: 1; border: 0; background: transparent; color: var(--txt); font-family: var(--mono); font-size: 12px; outline: none; }
+  .search input::placeholder { color: var(--txt-3); }
+
+  .body { display: grid; grid-template-columns: 46px 1fr 260px; min-height: 0; }
+  .nav { display: flex; flex-direction: column; align-items: center; gap: 4px; padding-top: 10px; border-right: 1px solid var(--edge-soft); }
+  .nav button { width: 34px; height: 34px; border: 1px solid transparent; background: transparent; color: var(--txt-3); cursor: pointer; display: grid; place-items: center; }
+  .nav button svg { width: 19px; height: 19px; }
+  .nav button:hover { color: var(--txt-2); }
+  .nav button.on { color: var(--amber); border-color: var(--edge); background: var(--panel-2); }
+
+  .center { display: grid; grid-template-rows: 42px 1fr 146px; min-width: 0; min-height: 0; }
+  .tunehdr { display: flex; align-items: center; gap: 14px; padding: 0 14px; border-bottom: 1px solid var(--edge-soft); }
+  .bigfreq { color: var(--amber); font-size: 23px; letter-spacing: .5px; font-variant-numeric: tabular-nums; }
+  .bigfreq .lead { color: var(--txt-3); }
+  .bigfreq .u { font-size: 12px; color: var(--txt-2); margin-left: 7px; }
+  .level { margin-left: auto; display: flex; align-items: center; gap: 9px; color: var(--txt-3); font-size: 11.5px; }
+  .bar { width: 120px; height: 7px; background: #1a1814; border: 1px solid var(--edge); position: relative; }
+  .bar > i { position: absolute; inset: 1px; right: 32%; background: var(--amber); }
+  .level b { color: var(--txt-2); }
+
+  .plot { position: relative; min-height: 0; border-bottom: 1px solid var(--edge-soft); display: grid; grid-template-columns: 46px 1fr; }
+  .axis { border-right: 1px solid var(--edge-soft); position: relative; }
+  .axis span { position: absolute; right: 6px; font-size: 10px; color: var(--txt-3); transform: translateY(-50%); }
+  .stack { position: relative; display: grid; grid-template-rows: 36% 64%; min-height: 0; }
+  .stack canvas { width: 100%; height: 100%; display: block; }
+  .specwrap { position: relative; border-bottom: 1px solid var(--edge-soft); }
+  .overlay { position: absolute; inset: 0; pointer-events: none; }
+  .band { position: absolute; top: 0; bottom: 0; left: 49%; width: 2%; background: rgba(233,162,60,0.10); border-inline: 1px solid rgba(233,162,60,.45); }
+  .center-mark { position: absolute; top: 0; bottom: 0; left: 50%; width: 1px; background: var(--rose); opacity: .8; }
+  .readout { position: absolute; top: 7px; right: 9px; font-size: 11px; color: var(--amber); background: rgba(13,12,10,.7); border: 1px solid var(--edge); padding: 3px 7px; }
+
+  .bottom { display: grid; grid-template-rows: 28px 1fr; min-height: 0; }
+  .tabs { display: flex; border-bottom: 1px solid var(--edge-soft); }
+  .tabs button { border: 0; border-right: 1px solid var(--edge-soft); background: transparent; color: var(--txt-2); font-family: var(--mono); font-size: 12px; padding: 0 15px; cursor: pointer; }
+  .tabs button.on { color: var(--amber); background: var(--panel-2); }
+  .tabbody { overflow: auto; padding: 7px 12px; font-size: 12px; }
+  .row { display: grid; grid-template-columns: 70px 64px 1fr 60px; gap: 12px; padding: 3px 0; color: var(--txt-2); white-space: nowrap; }
+  .row .t { color: var(--txt-3); } .row .k { color: var(--teal); } .row b { color: var(--txt); } .row .m { text-align: right; color: var(--txt-3); }
+
+  .inspect { border-left: 1px solid var(--edge-soft); background: var(--panel); display: flex; flex-direction: column; min-height: 0; }
+  .inspect h3 { font-size: 12px; color: var(--txt-2); padding: 11px 12px 5px; }
+  .inspect h3 small { color: var(--txt-3); }
+  .seg { display: flex; margin: 0 11px 9px; border: 1px solid var(--edge); }
+  .seg button { flex: 1; border: 0; border-right: 1px solid var(--edge-soft); background: transparent; color: var(--txt-2); font-size: 11px; padding: 6px 0; cursor: pointer; }
+  .seg button:last-child { border-right: 0; }
+  .seg button.on { background: var(--panel-2); color: var(--amber); }
+  .wave { margin: 0 11px 9px; height: 52px; border: 1px solid var(--edge); background: #0a0907; }
+  .stats { display: grid; grid-template-columns: 1fr 1fr; gap: 7px; padding: 0 11px 9px; }
+  .stat { border: 1px solid var(--edge); padding: 7px 9px; }
+  .stat label { font-size: 11px; color: var(--txt-3); display: block; margin-bottom: 2px; }
+  .stat b { font-size: 15px; color: var(--amber); }
+  .settings { padding: 2px 11px 11px; overflow: auto; }
+  .field { display: flex; justify-content: space-between; padding: 5px 0; }
+  .field label { font-size: 12px; color: var(--txt-2); }
+  .dd { font-size: 12px; color: var(--txt); }
+  .dd b { color: var(--amber); font-weight: 500; }
+
+  .transport { display: flex; align-items: center; gap: 14px; padding: 0 14px; border-top: 1px solid var(--edge-soft); }
+  .tbtn { width: 28px; height: 22px; border: 1px solid var(--edge); background: var(--panel-2); color: var(--txt-2); cursor: pointer; display: grid; place-items: center; }
+  .tbtn svg { width: 14px; height: 14px; }
+  .scrub { flex: 1; height: 8px; border: 1px solid var(--edge); background: #100e0b; position: relative; }
+  .scrub > i { position: absolute; left: 0; top: 0; bottom: 0; width: 64%; background: rgba(233,162,60,.22); }
+  .scrub > b { position: absolute; left: 64%; top: -2px; width: 2px; height: 12px; background: var(--amber); }
+  .tlabel { font-size: 11px; color: var(--txt-3); }
+  .rec { display: flex; align-items: center; gap: 6px; font-size: 11px; color: var(--txt-2); }
+  .rec i { width: 8px; height: 8px; background: var(--rose); }
+</style>
+</head>
+<body>
+<div class="app">
+  <div class="titlebar">
+    <span class="nowfreq">133.700 <span class="u">MHz</span></span>
+    <span class="status"><span>am</span><span>bw <b>12k</b></span><span>gain <b>28</b></span></span>
+    <span class="spacer"></span>
+    <label class="search"><span data-icon="search"></span><input placeholder="search frequencies, bookmarks…" /></label>
+  </div>
+
+  <div class="body">
+    <div class="nav">
+      <button class="on" data-icon="listen"></button>
+      <button data-icon="library"></button>
+      <button data-icon="recordings"></button>
+      <button data-icon="settings"></button>
+    </div>
+
+    <div class="center">
+      <div class="tunehdr">
+        <div class="bigfreq"><span class="lead">00</span>133.700 000<span class="u">MHz</span></div>
+        <div class="level">level <div class="bar"><i></i></div><b>−21 dB</b></div>
+      </div>
+
+      <div class="plot">
+        <div class="axis" id="axis"></div>
+        <div class="stack">
+          <div class="specwrap"><canvas id="spec"></canvas></div>
+          <canvas id="wf"></canvas>
+          <div class="overlay"><div class="band"></div><div class="center-mark"></div><div class="readout">133.642 MHz  2.4s ago</div></div>
+        </div>
+      </div>
+
+      <div class="bottom">
+        <div class="tabs"><button class="on">decoder</button><button>events</button><button>channels</button></div>
+        <div class="tabbody">
+          <div class="row"><span class="t">14:02:11</span><span class="k">ads-b</span><span><b>AC123</b>  FL390  270°  481kt</span><span class="m">−18dB</span></div>
+          <div class="row"><span class="t">14:01:54</span><span class="k">433</span><span><b>Acurite</b>  21.4°C  58%RH  batt ok</span><span class="m">ok</span></div>
+          <div class="row"><span class="t">14:01:03</span><span class="k">pager</span><span><b>148.350</b>  “call ext 4471”</span><span class="m">1200</span></div>
+          <div class="row"><span class="t">13:59:40</span><span class="k">ais</span><span><b>Bay Queen</b>  316…  12.3kn  088°</span><span class="m">—</span></div>
+          <div class="row"><span class="t">13:58:22</span><span class="k">ads-b</span><span><b>SWA88</b>  FL340  091°  412kt</span><span class="m">−22dB</span></div>
+        </div>
+      </div>
+    </div>
+
+    <div class="inspect">
+      <h3>inspect <small>· demodulated</small></h3>
+      <div class="seg"><button>iq</button><button>baseband</button><button class="on">demod</button><button>bits</button></div>
+      <canvas class="wave" id="iwave"></canvas>
+      <div class="stats"><div class="stat"><label>snr</label><b>18 dB</b></div><div class="stat"><label>bandwidth</label><b>12 kHz</b></div></div>
+      <h3>display</h3>
+      <div class="settings">
+        <div class="field"><label>resolution</label><span class="dd"><b>4096</b></span></div>
+        <div class="field"><label>window</label><span class="dd"><b>hann</b></span></div>
+        <div class="field"><label>colors</label><span class="dd"><b>amber</b></span></div>
+        <div class="field"><label>frame rate</label><span class="dd"><b>30 fps</b></span></div>
+        <div class="field"><label>smoothing</label><span class="dd"><b>0.50</b></span></div>
+        <div class="field"><label>range</label><span class="dd"><b>auto</b></span></div>
+      </div>
+    </div>
+  </div>
+
+  <div class="transport">
+    <button class="tbtn" data-icon="prev"></button>
+    <button class="tbtn" data-icon="play"></button>
+    <button class="tbtn" data-icon="next"></button>
+    <div class="scrub"><i></i><b></b></div>
+    <span class="tlabel">−12s</span>
+    <span class="rec"><i></i> rec</span>
+    <span class="tlabel">44.1k</span>
+  </div>
+</div>
+
+<script>
+window.THEME = {
+  cmap: [[0,10,9,7],[0.4,54,30,6],[0.68,150,90,16],[0.85,233,162,60],[1,250,232,196]],
+  line: "rgba(233,162,60,0.95)", fill: "rgba(233,162,60,0.07)",
+  grid: "rgba(255,255,255,0.04)", bg: "#0a0907", lineWidth: 1.2,
+};
+</script>
+<script src="signal.js"></script>
+</body>
+</html>

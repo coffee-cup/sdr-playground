@@ -1,11 +1,12 @@
 use gpui::*;
 use gpui_component::{ActiveTheme, Icon, IconName};
+use serde::{Deserialize, Serialize};
 
 use crate::app::SdrApp;
 
 /// Top-level workspaces switched by the nav rail. Each is a full-frame arrangement
 /// (see `docs/UI.md`).
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Workspace {
     Listen,
     Library,

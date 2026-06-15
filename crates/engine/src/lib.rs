@@ -32,6 +32,11 @@ pub use sdr_dsp::{SpectrumConfig, WindowKind};
 /// How often the reader thread publishes fresh taps (~30 Hz). Also the waterfall's row rate.
 const PUBLISH_INTERVAL: Duration = Duration::from_millis(33);
 
+/// Clamp a requested frame rate to a sane range and convert it to a publish interval.
+fn fps_to_interval(fps: f32) -> Duration {
+    Duration::from_secs_f32(1.0 / fps.clamp(1.0, 120.0))
+}
+
 /// Pipeline configuration. Sane defaults; the surface exists so the UI and CLI can tune it
 /// later without reshaping the engine.
 #[derive(Debug, Clone)]
@@ -52,6 +57,10 @@ impl Default for EngineConfig {
 
 enum Ctrl {
     Tune(u64),
+    /// Swap the spectrum analyzer live (FFT size and/or window) without reopening the device.
+    SetSpectrum(SpectrumConfig),
+    /// Change the publish/waterfall-row rate in frames per second.
+    SetFps(f32),
     Stop,
 }
 
@@ -116,6 +125,17 @@ impl Engine {
         let _ = self.ctrl.send(Ctrl::Tune(hz));
     }
 
+    /// Reconfigure the spectrum analyzer (FFT size, window) live. The reader rebuilds it between
+    /// reads; the device stream is uninterrupted.
+    pub fn set_spectrum(&self, config: SpectrumConfig) {
+        let _ = self.ctrl.send(Ctrl::SetSpectrum(config));
+    }
+
+    /// Set the publish/waterfall-row rate in frames per second.
+    pub fn set_fps(&self, fps: f32) {
+        let _ = self.ctrl.send(Ctrl::SetFps(fps));
+    }
+
     /// Stop the reader thread and wait for it to finish.
     pub fn stop(self) {
         drop(self);
@@ -144,9 +164,13 @@ fn reader_loop(
     config: EngineConfig,
     rx: mpsc::Receiver<Ctrl>,
 ) {
-    let fft_size = config.spectrum.fft_size;
-    let waveform_samples = config.waveform_samples.min(fft_size);
+    // The configured waveform length is the ceiling; the live value is re-clamped whenever the
+    // FFT size changes (a block is never shorter than the slice the waveform tap exposes).
+    let waveform_target = config.waveform_samples;
+    let mut fft_size = config.spectrum.fft_size;
+    let mut waveform_samples = waveform_target.min(fft_size);
     let mut analyzer = SpectrumAnalyzer::new(config.spectrum);
+    let mut publish_interval = PUBLISH_INTERVAL;
 
     let mut scratch = vec![Iq::default(); DEFAULT_READ_SAMPLES];
 
@@ -173,6 +197,15 @@ fn reader_loop(
                     eprintln!("tune failed: {e}");
                 }
             }
+            Ok(Ctrl::SetSpectrum(spectrum)) => {
+                fft_size = spectrum.fft_size;
+                waveform_samples = waveform_target.min(fft_size);
+                analyzer = SpectrumAnalyzer::new(spectrum);
+                block.resize(fft_size, Iq::default());
+                last_block.resize(fft_size, Iq::default());
+                block_pos = 0;
+            }
+            Ok(Ctrl::SetFps(fps)) => publish_interval = fps_to_interval(fps),
             Ok(Ctrl::Stop) | Err(TryRecvError::Disconnected) => break,
             Err(TryRecvError::Empty) => {}
         }
@@ -201,7 +234,7 @@ fn reader_loop(
         }
 
         let elapsed = last_publish.elapsed();
-        if elapsed >= PUBLISH_INTERVAL {
+        if elapsed >= publish_interval {
             let throughput = window_count as f64 / elapsed.as_secs_f64();
             let mean_power = (window_power_sum / window_count.max(1) as f64) as f32;
             publish_snapshot(
@@ -267,6 +300,7 @@ fn publish_snapshot(
     peak_power: f32,
     running: bool,
 ) {
+    let (tune_min, tune_max) = source.tune_range();
     tap.store(Arc::new(Snapshot {
         center_freq: source.center_freq(),
         sample_rate: source.sample_rate(),
@@ -276,6 +310,8 @@ fn publish_snapshot(
         peak_power,
         mean_dbfs: snapshot::to_dbfs(mean_power),
         peak_dbfs: snapshot::to_dbfs(peak_power),
+        tune_min,
+        tune_max,
         running,
     }));
 }
@@ -303,4 +339,79 @@ fn publish_frames(
         sample_rate: source.sample_rate(),
         seq,
     }));
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::time::Instant;
+
+    /// An endless source of constant samples, so the reader keeps running while we reconfigure it.
+    struct EndlessSource {
+        rate: u32,
+        freq: u64,
+    }
+
+    impl Source for EndlessSource {
+        fn sample_rate(&self) -> u32 {
+            self.rate
+        }
+        fn center_freq(&self) -> u64 {
+            self.freq
+        }
+        fn tune(&mut self, hz: u64) -> sdr_core::Result<()> {
+            self.freq = hz;
+            Ok(())
+        }
+        fn read(&mut self, out: &mut [Iq]) -> sdr_core::Result<usize> {
+            out.fill(Iq::new(0.5, 0.0));
+            Ok(out.len())
+        }
+    }
+
+    /// Wait for a published spectrum frame whose `fft_size` matches `want`, or panic on timeout.
+    fn wait_for_fft_size(engine: &Engine, want: usize) -> u64 {
+        let deadline = Instant::now() + Duration::from_secs(3);
+        loop {
+            let spec = engine.spectrum();
+            if spec.seq > 0 && spec.fft_size == want {
+                return spec.seq;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "no frame with fft_size {want} (saw {})",
+                spec.fft_size
+            );
+            thread::sleep(Duration::from_millis(2));
+        }
+    }
+
+    #[test]
+    fn set_spectrum_reconfigures_fft_size_live() {
+        let source = EndlessSource {
+            rate: 2_048_000,
+            freq: 100_000_000,
+        };
+        let engine = Engine::start(
+            Box::new(source),
+            EngineConfig {
+                spectrum: SpectrumConfig {
+                    fft_size: 8192,
+                    window: WindowKind::Hann,
+                },
+                waveform_samples: 1024,
+            },
+        );
+
+        wait_for_fft_size(&engine, 8192);
+
+        engine.set_spectrum(SpectrumConfig {
+            fft_size: 2048,
+            window: WindowKind::Hann,
+        });
+        let seq = wait_for_fft_size(&engine, 2048);
+        assert!(seq > 0);
+
+        engine.stop();
+    }
 }

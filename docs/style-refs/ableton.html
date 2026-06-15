@@ -1,0 +1,237 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>SDR · Ableton dark</title>
+<style>
+  /* Flat dark, modelled on Ableton Live 12's dark theme: warm-gray surfaces, near-black
+     insets, one orange accent + cyan data, no gradients or bevels. */
+  :root {
+    --bg: #1c1c1c;
+    --surface: #2d2d2d;
+    --surface-2: #383838;
+    --control: #3c3c3c;
+    --inset: #161616;
+    --line: #131313;
+    --line-hi: #404040;
+    --txt: #d2d2d2;
+    --txt-2: #8c8c8c;
+    --txt-3: #5c5c5c;
+    --orange: #ff8c2b;
+    --cyan: #4fd0e6;
+    --green: #7ec64a;
+    --yellow: #dcc24a;
+    --red: #d85a4e;
+    --ui: "Inter", -apple-system, "Helvetica Neue", system-ui, sans-serif;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body { height: 100%; }
+  body { font-family: var(--ui); background: var(--bg); color: var(--txt); font-size: 12px; overflow: hidden; -webkit-font-smoothing: antialiased; }
+  .app { display: grid; grid-template-rows: 36px 1fr 38px; height: 100vh; }
+  .num { font-variant-numeric: tabular-nums; }
+
+  .titlebar { display: flex; align-items: center; gap: 14px; padding: 0 12px; background: var(--surface); border-bottom: 1px solid var(--line); }
+  .nowfreq { font-size: 13px; font-weight: 500; }
+  .nowfreq .u { color: var(--txt-3); }
+  .status { display: flex; gap: 6px; }
+  .vbox { display: inline-flex; align-items: baseline; gap: 5px; background: var(--control); border: 1px solid var(--line); border-radius: 2px; padding: 2px 7px; color: var(--txt-2); font-size: 11px; }
+  .vbox b { color: var(--txt); font-weight: 500; }
+  .spacer { flex: 1; }
+  .search { display: flex; align-items: center; gap: 7px; width: 240px; height: 23px; padding: 0 8px; background: var(--inset); border: 1px solid var(--line); border-radius: 2px; color: var(--txt-3); }
+  .search svg { width: 13px; height: 13px; }
+  .search input { flex: 1; border: 0; background: transparent; color: var(--txt); font-family: var(--ui); font-size: 12px; outline: none; }
+  .search input::placeholder { color: var(--txt-3); }
+
+  .body { display: grid; grid-template-columns: 46px 1fr 288px; min-height: 0; }
+  .nav { display: flex; flex-direction: column; align-items: center; gap: 4px; padding-top: 8px; background: var(--surface); border-right: 1px solid var(--line); }
+  .nav button { width: 34px; height: 32px; border: 0; border-radius: 3px; background: transparent; color: var(--txt-3); cursor: pointer; display: grid; place-items: center; }
+  .nav button svg { width: 19px; height: 19px; }
+  .nav button:hover { color: var(--txt-2); background: var(--surface-2); }
+  .nav button.on { color: var(--orange); background: var(--surface-2); }
+
+  .center { display: grid; grid-template-rows: 44px 1fr 150px; min-width: 0; min-height: 0; background: var(--bg); }
+  .tunehdr { display: flex; align-items: center; gap: 14px; padding: 0 14px; border-bottom: 1px solid var(--line); }
+  .bigfreq { font-size: 26px; font-weight: 600; letter-spacing: .3px; }
+  .bigfreq .lead { color: var(--txt-3); }
+  .bigfreq .u { font-size: 12px; color: var(--txt-2); margin-left: 7px; font-weight: 400; }
+  .hmeter { margin-left: auto; display: flex; align-items: center; gap: 9px; color: var(--txt-2); }
+  .segbar { display: flex; gap: 2px; }
+  .segbar i { width: 4px; height: 14px; background: #2a2a2a; }
+  .segbar i.g { background: var(--green); } .segbar i.y { background: var(--yellow); } .segbar i.r { background: var(--red); }
+  .hmeter b { color: var(--txt); }
+
+  /* signal display = the device graph */
+  .graph { position: relative; min-height: 0; margin: 8px; border: 1px solid var(--line); background: var(--inset); display: grid; grid-template-columns: 44px 1fr; }
+  .axis { border-right: 1px solid rgba(255,255,255,0.05); position: relative; }
+  .axis span { position: absolute; right: 6px; font-size: 10px; color: var(--txt-3); transform: translateY(-50%); }
+  .stack { position: relative; display: grid; grid-template-rows: 40% 60%; min-height: 0; }
+  .stack canvas { width: 100%; height: 100%; display: block; }
+  .specwrap { position: relative; border-bottom: 1px solid rgba(255,255,255,0.06); }
+  .overlay { position: absolute; inset: 0; pointer-events: none; }
+  .band { position: absolute; top: 0; bottom: 0; left: 49%; width: 2%; background: rgba(255,140,43,0.12); border-inline: 1px solid rgba(255,140,43,.55); }
+  .center-mark { position: absolute; top: 0; bottom: 0; left: 50%; width: 1px; background: var(--orange); opacity: .85; }
+  .node { position: absolute; left: 50%; top: 26%; width: 13px; height: 13px; margin: -7px 0 0 -7px; border-radius: 50%; border: 2px solid var(--orange); background: rgba(255,140,43,0.18); }
+  .readout { position: absolute; top: 7px; right: 9px; font-size: 11px; color: var(--txt-2); background: rgba(0,0,0,.45); border-radius: 2px; padding: 2px 6px; }
+
+  .bottom { display: grid; grid-template-rows: 28px 1fr; min-height: 0; border-top: 1px solid var(--line); }
+  .tabs { display: flex; background: var(--surface); border-bottom: 1px solid var(--line); }
+  .tabs button { border: 0; border-right: 1px solid var(--line); background: transparent; color: var(--txt-2); font-family: var(--ui); font-size: 12px; padding: 0 14px; cursor: pointer; }
+  .tabs button.on { color: var(--orange); background: var(--bg); }
+  .tabbody { overflow: auto; padding: 6px 14px; }
+  .row { display: grid; grid-template-columns: 72px 70px 1fr 60px; gap: 12px; padding: 4px 0; align-items: baseline; color: var(--txt-2); font-size: 12px; }
+  .row .t { color: var(--txt-3); }
+  .row .k { color: var(--cyan); }
+  .row b { color: var(--txt); font-weight: 500; }
+  .row .m { text-align: right; color: var(--txt-3); }
+
+  /* inspect = a device */
+  .inspect { background: var(--surface); border-left: 1px solid var(--line); display: flex; flex-direction: column; min-height: 0; }
+  .devhdr { display: flex; align-items: center; gap: 9px; height: 28px; padding: 0 11px; background: var(--surface-2); border-bottom: 1px solid var(--line); }
+  .pwr { width: 11px; height: 11px; border-radius: 50%; background: var(--orange); }
+  .devhdr .name { font-size: 12.5px; font-weight: 600; color: var(--txt); }
+  .devhdr .sub { font-size: 11px; color: var(--txt-3); margin-left: auto; }
+  .devbody { display: grid; grid-template-columns: 1fr 14px; min-height: 0; }
+  .devmain { overflow: auto; }
+  .vmeter { display: flex; flex-direction: column-reverse; gap: 1px; padding: 10px 4px; border-left: 1px solid var(--line); }
+  .vmeter i { flex: 1; background: #242424; }
+  .vmeter i.g { background: var(--green); } .vmeter i.y { background: var(--yellow); } .vmeter i.r { background: var(--red); }
+
+  .knobs { display: flex; gap: 14px; padding: 14px 12px 10px; }
+  .knob { display: flex; flex-direction: column; align-items: center; gap: 6px; }
+  .dial { --sweep: 180deg; --arc: var(--orange); width: 44px; height: 44px; border-radius: 50%; position: relative;
+    background: conic-gradient(from 215deg, var(--arc) 0 var(--sweep), #4a4a4a var(--sweep) 290deg, var(--surface) 290deg 360deg); }
+  .dial::before { content: ""; position: absolute; inset: 4px; border-radius: 50%; background: #1f1f1f; }
+  .dial::after { content: ""; position: absolute; left: 50%; top: 5px; width: 2px; height: 13px; margin-left: -1px; background: var(--txt); transform-origin: 50% 17px; transform: rotate(calc(215deg + var(--sweep))); }
+  .knob label { font-size: 11px; color: var(--txt-2); }
+  .knob b { font-size: 11.5px; color: var(--txt); }
+  .knob b.c { color: var(--cyan); }
+
+  .seg2 { display: flex; gap: 2px; margin: 0 12px 12px; }
+  .seg2 button { flex: 1; border: 1px solid var(--line); background: var(--control); color: var(--txt-2); font-size: 11px; padding: 5px 0; cursor: pointer; border-radius: 2px; }
+  .seg2 button.on { background: var(--orange); color: #1a1a1a; border-color: var(--orange); font-weight: 500; }
+  .wave { margin: 0 12px 12px; height: 52px; border: 1px solid var(--line); background: var(--inset); }
+  .stats { display: grid; grid-template-columns: 1fr 1fr; gap: 2px; margin: 0 12px 12px; }
+  .stat { background: var(--inset); border: 1px solid var(--line); padding: 7px 10px; }
+  .stat label { font-size: 10.5px; color: var(--txt-3); display: block; margin-bottom: 3px; }
+  .stat b { font-size: 16px; font-weight: 600; color: var(--cyan); }
+  .params { padding: 0 12px 12px; }
+  .field { display: flex; justify-content: space-between; align-items: center; padding: 4px 0; }
+  .field label { font-size: 12px; color: var(--txt-2); }
+  .dd { display: inline-flex; align-items: center; gap: 8px; font-size: 11.5px; color: var(--txt); background: var(--control); border: 1px solid var(--line); border-radius: 2px; padding: 3px 8px; min-width: 92px; justify-content: space-between; }
+  .dd::after { content: "▾"; color: var(--txt-3); font-size: 10px; }
+
+  .transport { display: flex; align-items: center; gap: 14px; padding: 0 14px; background: var(--surface); border-top: 1px solid var(--line); }
+  .tbtn { width: 30px; height: 24px; border: 1px solid var(--line); border-radius: 2px; background: var(--control); color: var(--txt); cursor: pointer; display: grid; place-items: center; }
+  .tbtn svg { width: 14px; height: 14px; }
+  .tbtn.play { color: var(--orange); }
+  .scrub { flex: 1; height: 8px; background: var(--inset); border: 1px solid var(--line); position: relative; }
+  .scrub > i { position: absolute; left: 0; top: 0; bottom: 0; width: 64%; background: var(--orange); opacity: .85; }
+  .scrub > b { position: absolute; left: 64%; top: -2px; width: 2px; height: 10px; background: var(--orange); }
+  .tlabel { font-size: 11px; color: var(--txt-2); }
+  .rec { display: flex; align-items: center; gap: 6px; font-size: 11px; color: var(--txt-2); }
+  .rec i { width: 9px; height: 9px; border-radius: 2px; background: var(--red); }
+</style>
+</head>
+<body>
+<div class="app">
+  <div class="titlebar">
+    <span class="nowfreq num">133.700 <span class="u">MHz</span></span>
+    <span class="status">
+      <span class="vbox"><b>AM</b></span>
+      <span class="vbox">bw <b class="num">12k</b></span>
+      <span class="vbox">gain <b class="num">28</b></span>
+    </span>
+    <span class="spacer"></span>
+    <label class="search"><span data-icon="search"></span><input placeholder="Search frequencies and bookmarks" /></label>
+  </div>
+
+  <div class="body">
+    <div class="nav">
+      <button class="on" data-icon="listen"></button>
+      <button data-icon="library"></button>
+      <button data-icon="recordings"></button>
+      <button data-icon="settings"></button>
+    </div>
+
+    <div class="center">
+      <div class="tunehdr">
+        <div class="bigfreq num"><span class="lead">00</span>133.700000<span class="u">MHz</span></div>
+        <div class="hmeter">Level
+          <div class="segbar"><i class="g"></i><i class="g"></i><i class="g"></i><i class="g"></i><i class="g"></i><i class="g"></i><i class="y"></i><i class="y"></i><i></i><i></i><i></i><i class="r"></i></div>
+          <b class="num">−21 dB</b>
+        </div>
+      </div>
+
+      <div class="graph">
+        <div class="axis" id="axis"></div>
+        <div class="stack">
+          <div class="specwrap"><canvas id="spec"></canvas></div>
+          <canvas id="wf"></canvas>
+          <div class="overlay">
+            <div class="band"></div>
+            <div class="center-mark"></div>
+            <div class="node"></div>
+            <div class="readout num">133.642 MHz · 2.4s ago</div>
+          </div>
+        </div>
+      </div>
+
+      <div class="bottom">
+        <div class="tabs"><button class="on">Decoder</button><button>Events</button><button>Channels</button></div>
+        <div class="tabbody">
+          <div class="row"><span class="t num">14:02:11</span><span class="k">ADS-B</span><span><b>AC123</b> &nbsp;FL390 · 270° · 481 kt</span><span class="m num">−18 dB</span></div>
+          <div class="row"><span class="t num">14:01:54</span><span class="k">433</span><span><b>Acurite 0x3f</b> &nbsp;21.4°C · 58% RH</span><span class="m">ok</span></div>
+          <div class="row"><span class="t num">14:01:03</span><span class="k">Pager</span><span><b>148.350</b> &nbsp;“call ext 4471”</span><span class="m num">1200</span></div>
+          <div class="row"><span class="t num">13:59:40</span><span class="k">AIS</span><span><b>Bay Queen</b> &nbsp;316… · 12.3 kn · 088°</span><span class="m">—</span></div>
+        </div>
+      </div>
+    </div>
+
+    <div class="inspect">
+      <div class="devhdr"><span class="pwr"></span><span class="name">Demod</span><span class="sub">AM · 12 kHz</span></div>
+      <div class="devbody">
+        <div class="devmain">
+          <div class="knobs">
+            <div class="knob"><div class="dial" style="--sweep:150deg"></div><label>Gain</label><b class="num">28</b></div>
+            <div class="knob"><div class="dial" style="--sweep:96deg"></div><label>Squelch</label><b class="num">−42</b></div>
+            <div class="knob"><div class="dial" style="--sweep:188deg;--arc:var(--cyan)"></div><label>Bandwidth</label><b class="c num">12k</b></div>
+          </div>
+          <div class="seg2"><button>IQ</button><button>Baseband</button><button class="on">Demod</button><button>Bits</button></div>
+          <canvas class="wave" id="iwave"></canvas>
+          <div class="stats"><div class="stat"><label>Signal-to-noise</label><b class="num">18 dB</b></div><div class="stat"><label>Symbol rate</label><b class="num">1200</b></div></div>
+          <div class="params">
+            <div class="field"><label>Resolution</label><span class="dd">4096</span></div>
+            <div class="field"><label>Window</label><span class="dd">Hann</span></div>
+            <div class="field"><label>Colors</label><span class="dd">Ice</span></div>
+            <div class="field"><label>Smoothing</label><span class="dd">Medium</span></div>
+          </div>
+        </div>
+        <div class="vmeter">
+          <i class="r"></i><i class="y"></i><i class="y"></i><i class="g"></i><i class="g"></i><i class="g"></i><i class="g"></i><i class="g"></i><i></i><i></i><i></i><i></i><i></i><i></i>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="transport">
+    <button class="tbtn" data-icon="prev"></button>
+    <button class="tbtn play" data-icon="play"></button>
+    <button class="tbtn" data-icon="pause"></button>
+    <div class="scrub"><i></i><b></b></div>
+    <span class="tlabel num">−12s</span>
+    <span class="rec"><i></i> Recording</span>
+    <span class="tlabel num">44.1 kHz</span>
+  </div>
+</div>
+
+<script>
+window.THEME = {
+  cmap: [[0,18,20,24],[0.34,20,52,82],[0.58,30,116,158],[0.76,64,190,222],[0.9,150,224,240],[1,232,248,252]],
+  line: "rgba(79,208,230,0.95)", fill: "rgba(176,178,184,0.13)",
+  grid: "rgba(255,255,255,0.05)", bg: "#161616",
+};
+</script>
+<script src="signal.js"></script>
+</body>
+</html>

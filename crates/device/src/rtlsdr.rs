@@ -149,6 +149,12 @@ impl Source for RtlSdrSource {
         Ok(())
     }
 
+    fn tune_range(&self) -> (u64, u64) {
+        // The R820T/R828D tuners on the RTL-SDR V3 cover ~24 MHz to 1.766 GHz. Direct-sampling
+        // (which reaches HF below 24 MHz) is not enabled, so this is the usable range.
+        (24_000_000, 1_766_000_000)
+    }
+
     fn read(&mut self, out: &mut [Iq]) -> Result<usize> {
         let want = out.len() * 2;
         self.byte_buf.resize(want, 0);

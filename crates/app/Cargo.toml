@@ -12,3 +12,7 @@ gpui_platform.workspace = true
 gpui-component.workspace = true
 gpui-component-assets.workspace = true
 image.workspace = true
+redb.workspace = true
+directories.workspace = true
+serde.workspace = true
+serde_json.workspace = true

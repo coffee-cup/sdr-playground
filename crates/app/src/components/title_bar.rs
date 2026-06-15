@@ -17,7 +17,7 @@ pub fn render(app: &SdrApp, cx: &mut Context<SdrApp>) -> impl IntoElement {
             let s = engine.snapshot();
             format!(
                 "{:.3} MHz   {:.3} MS/s",
-                s.center_freq as f64 / 1e6,
+                app.tuned_freq() as f64 / 1e6,
                 s.sample_rate as f64 / 1e6,
             )
         }

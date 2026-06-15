@@ -8,21 +8,24 @@
 
 use std::collections::VecDeque;
 use std::sync::Arc;
+use std::time::{Duration, Instant};
 
-use gpui::prelude::FluentBuilder;
 use gpui::{
-    canvas, div, img, point, px, Bounds, Hsla, ImageSource, IntoElement, ObjectFit, ParentElement,
-    Path, PathBuilder, Pixels, RenderImage, Styled, StyledImage,
+    canvas, div, point, px, relative, Bounds, Corners, Hsla, IntoElement, ParentElement, Path,
+    PathBuilder, Pixels, RenderImage, Styled,
 };
 use image::{Frame, ImageBuffer, Rgba};
 use sdr_engine::{Engine, SpectrumFrame};
 
 use crate::colormap::Colormap;
+use crate::ui::tokens;
 
 /// Waterfall texture width (frequency bins) and height (history rows). The texture is scaled
-/// to the panel, so these are fixed regardless of layout size.
-const WF_COLS: usize = 1024;
-const WF_ROWS: usize = 320;
+/// to the panel; sized near typical panel pixels so the image is not upscaled (which blurs both
+/// axes and is what made the waterfall look low-detail next to gqrx). At 30 Hz, 512 rows is
+/// ~17 s of history and fills in that long on launch. 2048x512x4 ≈ 4 MB.
+const WF_COLS: usize = 2048;
+const WF_ROWS: usize = 512;
 /// dB window the display spans, above the tracked floor.
 const SPAN: f32 = 80.0;
 /// How far below the median the floor sits, so noise renders dark rather than mid-bright.
@@ -34,27 +37,51 @@ const FLOOR_ALPHA: f32 = 0.1;
 /// contiguous BGRA texture on each new spectrum frame.
 pub struct Waterfall {
     rows: VecDeque<Box<[u8]>>,
+    /// Wall-clock instant each row was pushed, aligned with `rows`, for the hover time readout.
+    times: VecDeque<Instant>,
     scratch: Vec<u8>,
     image: Option<Arc<RenderImage>>,
     floor: Option<f32>,
     last_seq: u64,
     colormap: Colormap,
+    /// When set, the dB window is fixed to this `(min, max)` instead of auto-tracking the floor.
+    range_override: Option<(f32, f32)>,
 }
 
 impl Waterfall {
     pub fn new() -> Self {
         Self {
             rows: VecDeque::with_capacity(WF_ROWS),
+            times: VecDeque::with_capacity(WF_ROWS),
             scratch: vec![0u8; WF_COLS * WF_ROWS * 4],
             image: None,
             floor: None,
             last_seq: 0,
             colormap: Colormap::default(),
+            range_override: None,
         }
+    }
+
+    /// How long ago the waterfall row at vertical fraction `y` (0 = top/newest) was captured.
+    pub fn row_age(&self, y: f32) -> Option<Duration> {
+        let row = ((y.clamp(0.0, 1.0) * WF_ROWS as f32) as usize).min(WF_ROWS - 1);
+        self.times.get(row).map(|t| t.elapsed())
+    }
+
+    pub fn set_colormap(&mut self, colormap: Colormap) {
+        self.colormap = colormap;
+    }
+
+    /// Fix the dB window, or pass `None` to resume auto-tracking the noise floor.
+    pub fn set_range_override(&mut self, range: Option<(f32, f32)>) {
+        self.range_override = range;
     }
 
     /// The shared dB window `(floor, ceil)` for the spectrum and colormap.
     pub fn range(&self) -> (f32, f32) {
+        if let Some(range) = self.range_override {
+            return range;
+        }
         let floor = self.floor.unwrap_or(-90.0) - FLOOR_MARGIN;
         (floor, floor + SPAN)
     }
@@ -81,8 +108,10 @@ impl Waterfall {
 
         self.rows
             .push_front(make_row(&frame.bins_db, floor, ceil, self.colormap.lut()));
+        self.times.push_front(Instant::now());
         while self.rows.len() > WF_ROWS {
             self.rows.pop_back();
+            self.times.pop_back();
         }
 
         let row_bytes = WF_COLS * 4;
@@ -105,19 +134,23 @@ impl Waterfall {
     }
 }
 
-/// The spectrum line over a dB grid, painted from the latest frame.
+/// The spectrum line over a dB/frequency grid, painted from the given (display-smoothed) bins.
+/// `vlines`/`hlines` are grid-line positions as fractions across/down the plot, so they line up
+/// exactly with the axis labels (which are placed at the same fractions).
 pub fn spectrum(
-    engine: Arc<Engine>,
+    bins: Vec<f32>,
     range: (f32, f32),
     line: Hsla,
     grid: Hsla,
+    vlines: Vec<f32>,
+    hlines: Vec<f32>,
 ) -> impl IntoElement {
     canvas(
-        move |bounds, _window, _cx| (engine.spectrum(), bounds),
-        move |_bounds, (frame, bounds), window, _cx| {
-            paint_grid(window, bounds, grid);
-            if frame.seq > 0 {
-                if let Some(path) = spectrum_path(&frame.bins_db, bounds, range) {
+        move |bounds, _window, _cx| bounds,
+        move |_bounds, bounds, window, _cx| {
+            paint_grid(window, bounds, &vlines, &hlines, grid);
+            if bins.len() >= 2 {
+                if let Some(path) = spectrum_path(&bins, bounds, range) {
                     window.paint_path(path, line);
                 }
             }
@@ -126,15 +159,132 @@ pub fn spectrum(
     .size_full()
 }
 
-/// The waterfall texture, scaled to fill the panel. Empty until the first frame.
+/// Left gutter of dB labels, each centered on its gridline.
+pub fn db_axis(ticks: &[(f32, String)], color: Hsla) -> impl IntoElement {
+    div()
+        .relative()
+        .h_full()
+        .w(tokens::DB_AXIS_WIDTH)
+        .text_size(tokens::TEXT_AXIS)
+        .text_color(color)
+        .children(ticks.iter().map(|(f, label)| {
+            div()
+                .absolute()
+                .top(relative(*f))
+                .left_0()
+                .right_0()
+                .h(px(14.))
+                .mt(px(-7.))
+                .flex()
+                .items_center()
+                .justify_end()
+                .pr(px(5.))
+                .child(label.clone())
+        }))
+}
+
+/// Horizontal frequency scale, each label centered on its gridline.
+pub fn freq_scale(ticks: &[(f32, String)], color: Hsla) -> impl IntoElement {
+    div()
+        .relative()
+        .w_full()
+        .h(px(16.))
+        .text_size(tokens::TEXT_AXIS)
+        .text_color(color)
+        .children(ticks.iter().map(|(f, label)| {
+            div()
+                .absolute()
+                .left(relative(*f))
+                .top_0()
+                .w(px(80.))
+                .ml(px(-40.))
+                .flex()
+                .justify_center()
+                .child(label.clone())
+        }))
+}
+
+/// Frequency-axis ticks across `center_freq ± sample_rate/2`, at round MHz/kHz steps. Returns
+/// `(fraction across the plot, label)`.
+pub fn freq_ticks(center_freq: u64, sample_rate: u32) -> Vec<(f32, String)> {
+    let span = sample_rate as f64;
+    if span <= 0.0 {
+        return Vec::new();
+    }
+    let lo = center_freq as f64 - span / 2.0;
+    let step = nice_step(span, 8.0);
+    let mut out = Vec::new();
+    let mut t = (lo / step).ceil() * step;
+    while t <= lo + span + 1.0 {
+        let f = ((t - lo) / span) as f32;
+        if (0.0..=1.0).contains(&f) {
+            out.push((f, fmt_mhz(t)));
+        }
+        t += step;
+    }
+    out
+}
+
+/// dB-axis ticks across `(floor, ceil)` at round steps. Returns `(fraction down from the top,
+/// label)`.
+pub fn db_ticks(range: (f32, f32)) -> Vec<(f32, String)> {
+    let (floor, ceil) = range;
+    let span = (ceil - floor) as f64;
+    if span <= 0.0 {
+        return Vec::new();
+    }
+    let step = nice_step(span, 6.0).max(1.0);
+    let mut out = Vec::new();
+    let mut v = (floor as f64 / step).ceil() * step;
+    while v <= ceil as f64 + 0.001 {
+        let f = ((ceil as f64 - v) / span) as f32;
+        if (0.0..=1.0).contains(&f) {
+            out.push((f, format!("{v:.0}")));
+        }
+        v += step;
+    }
+    out
+}
+
+/// Round a raw axis interval to a 1/2/5×10ⁿ step so labels land on readable values.
+fn nice_step(span: f64, target: f64) -> f64 {
+    if span <= 0.0 {
+        return 1.0;
+    }
+    let raw = span / target;
+    let mag = 10f64.powf(raw.log10().floor());
+    let norm = raw / mag;
+    let nice = if norm < 1.5 {
+        1.0
+    } else if norm < 3.0 {
+        2.0
+    } else if norm < 7.0 {
+        5.0
+    } else {
+        10.0
+    };
+    nice * mag
+}
+
+fn fmt_mhz(hz: f64) -> String {
+    let s = format!("{:.3}", hz / 1e6);
+    s.trim_end_matches('0').trim_end_matches('.').to_string()
+}
+
+/// The waterfall texture, painted to fill the panel exactly so it lines up with the spectrum
+/// above it. Empty until the first frame. Painted via `paint_image` rather than an `img` element
+/// because `img` imposes the texture's aspect ratio on the layout, which letterboxes the panel
+/// and shifts the frequency axis out of alignment with the spectrum.
 pub fn waterfall(image: Option<Arc<RenderImage>>) -> impl IntoElement {
-    div().size_full().when_some(image, |this, image| {
-        this.child(
-            img(ImageSource::Render(image))
-                .size_full()
-                .object_fit(ObjectFit::Fill),
-        )
-    })
+    canvas(
+        |_, _, _| {},
+        move |bounds, _, window, _| {
+            if let Some(image) = image {
+                let _ = window.paint_image(bounds, Corners::default(), image, 0, false);
+            }
+        },
+    )
+    .size_full()
 }
 
 /// The time-domain waveform: the real part of recent IQ across the width.
@@ -195,14 +345,30 @@ fn spectrum_path(bins: &[f32], bounds: Bounds<Pixels>, range: (f32, f32)) -> Opt
     builder.build().ok()
 }
 
-/// Horizontal dB gridlines at quarter-height intervals.
-fn paint_grid(window: &mut gpui::Window, bounds: Bounds<Pixels>, color: Hsla) {
+/// Grid lines at the given fractional positions (`hlines` horizontal, `vlines` vertical), so the
+/// grid aligns with the axis labels.
+fn paint_grid(
+    window: &mut gpui::Window,
+    bounds: Bounds<Pixels>,
+    vlines: &[f32],
+    hlines: &[f32],
+    color: Hsla,
+) {
     let (x0, y0, w, h) = xywh(bounds);
-    for i in 1..4 {
-        let y = px(y0 + h * i as f32 / 4.0);
+    for &f in hlines {
+        let y = px(y0 + h * f);
         let mut builder = PathBuilder::stroke(px(1.0));
         builder.move_to(point(px(x0), y));
         builder.line_to(point(px(x0 + w), y));
+        if let Ok(path) = builder.build() {
+            window.paint_path(path, color);
+        }
+    }
+    for &f in vlines {
+        let x = px(x0 + w * f);
+        let mut builder = PathBuilder::stroke(px(1.0));
+        builder.move_to(point(x, px(y0)));
+        builder.line_to(point(x, px(y0 + h)));
         if let Ok(path) = builder.build() {
             window.paint_path(path, color);
         }

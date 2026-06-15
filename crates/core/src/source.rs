@@ -18,6 +18,12 @@ pub trait Source: Send {
     /// Retune to `hz`. For a file source this updates the reported frequency only.
     fn tune(&mut self, hz: u64) -> Result<()>;
 
+    /// The inclusive frequency range (Hz) the source can tune to. The default is unrestricted;
+    /// hardware sources narrow it to what the tuner supports so callers can clamp before tuning.
+    fn tune_range(&self) -> (u64, u64) {
+        (0, u64::MAX)
+    }
+
     /// Fill `out` with up to `out.len()` samples, returning how many were written.
     ///
     /// `Ok(0)` signals end of stream (e.g. a file source reaching EOF), following the

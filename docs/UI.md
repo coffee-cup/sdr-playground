@@ -37,11 +37,11 @@ A fixed arrangement: a nav rail on the far left, a primary signal display in the
 
 **Nav rail.** A narrow icon column on the far left that switches the top-level workspace. It is always visible and never holds content itself. Workspaces are listed under Workspaces below.
 
-**Top bar.** A single status line for the active channel: frequency, mode, bandwidth, gain, and device state, with the command palette entry point (Cmd-K) at the right. Read-only display; editing happens in the Tune section of the inspect panel or through the palette.
+**Top bar.** A compact always-visible status line: the active frequency and sample rate (and, later, mode/bandwidth/gain), with the command palette entry point (Cmd-K) at the right. Read-only; inline tuning lives in the center header (below) and the palette.
 
-**Primary signal display (center).** The largest region and the focus of the app. It stacks the frequency-domain spectrum (FFT line) above the waterfall (spectrogram over time), with a draggable splitter between them so the user sets the ratio. The spectrum and waterfall share one dB scale that auto-tracks the noise floor, so the display stays readable across gain settings without a manual min/max control; the waterfall scrolls newest-on-top through a perceptual colormap. The time-domain waveform is also a primary display and can be promoted into the center (replacing or splitting with the waterfall); by default it appears smaller in the inspect panel. Waterfall and waveform are the two displays that define the app, so both are reachable without leaving the Listen workspace.
+**Primary signal display (center).** The largest region and the focus of the app. A tuning header runs across the top: a large frequency selector on the left and a read-only signal-level meter (−100..0 dBFS) on the right. The frequency selector is absolute tuning: each decimal digit is independently editable, so hovering a digit and scrolling the wheel steps that place (with carry), and typing a number writes it in and advances. Editing it does a full hardware retune, recentering the captured window on the entered frequency (marker at center). Clicking or dragging anywhere on the spectrum or waterfall instead offsets the tuned marker to the frequency under the cursor without recentering, so the picture stays still while tuning (the device captures a `sample_rate`-wide window, so moving within it needs no retune; dragging clamps to the window edge). The tuned (marker) frequency is the only frequency shown; the hardware center stays invisible. All tuning is clamped to the connected tuner's frequency range (reported by the device), so the radio cannot be driven out of range. Below the header it stacks the frequency-domain spectrum (FFT line) above the waterfall (spectrogram over time), with a draggable splitter between them so the user sets the ratio. The spectrum carries a dB axis on the left and a frequency scale along the bottom, between it and the waterfall; a red tuned-frequency marker and a translucent channel-bandwidth band overlay the spectrum, and hovering either pane shows a readout of the frequency under the cursor (and, on the waterfall, how long ago that row was captured). The spectrum and waterfall share one dB scale that by default auto-tracks the noise floor, with an optional manual min/max; the waterfall scrolls newest-on-top through a selectable perceptual colormap. The time-domain waveform is also a primary display and can be promoted into the center (replacing or splitting with the waterfall); by default it appears smaller in the inspect panel. Waterfall and waveform are the two displays that define the app, so both are reachable without leaving the Listen workspace.
 
-**Inspect panel (right).** The observability surface. It shows the output of a selected pipeline stage (raw IQ, baseband, demodulated waveform, recovered bits) plus derived readouts (SNR, bandwidth, symbol rate), and it holds the Tune controls. This panel is what makes a failed decode diagnosable rather than silent, so it is permanent rather than a modal. Collapsible when the user wants maximum display area.
+**Inspect panel (right).** The observability surface. It shows the output of a selected pipeline stage (raw IQ, baseband, demodulated waveform, recovered bits) plus derived readouts (SNR, bandwidth, symbol rate), and it holds the FFT/display settings (transform size, window, colormap, frame rate, averaging, bandwidth, dB scale) as dropdowns from the in-house `ui` component library, plus the Tune controls. This panel is what makes a failed decode diagnosable rather than silent, so it is permanent rather than a modal. Collapsible when the user wants maximum display area.
 
 **Bottom pane (tabbed).** The working surface beneath the signal display. Tabs:
 
@@ -106,7 +106,7 @@ The layout is fixed in arrangement and flexible in sizing. This is the deliberat
 - Every splitter is draggable, with minimum sizes enforced so no region collapses by accident.
 - The inspect panel, the bottom pane, and the nav rail (to icons only) are collapsible.
 - The spectrum/waterfall ratio inside the center is itself a draggable splitter.
-- Panel sizes and collapsed state are persisted per workspace and restored on launch.
+- Panel sizes and collapsed state are intended to persist per workspace and restore on launch (see Persistence; not wired yet).
 - Regions do not reorder, detach, or float. Free docking is out of scope: it moves most of the design effort onto the user and makes a good default impossible to guarantee.
 
 Keyboard-first interaction:
@@ -133,15 +133,18 @@ Alternative: split the bottom pane instead of tabbing it
 
 ---
 
-## Persistence (SQLite)
+## Persistence
 
-A single SQLite database, owned by `engine` and surfaced by the UI, backs the stored data. SQLite is the right fit because both bookmarks and history are queryable, filterable tables, and it needs no server.
+There are two stores, split by the shape of the data.
+
+**UI/session settings** persist in a small embedded key-value store (`redb`) under the platform app-support directory, owned by `app`. These are a single settings record, not a queryable table, so a KV store is the minimum effective fit. There is no manual save: every change is written (debounced) and the full state is restored on launch. Covered today: tuned frequency and the hardware center, marker bandwidth, FFT size and window, frame rate, colormap, display averaging, dB-scale mode and range, and the active workspace. (Panel sizes and collapsed flags are intended to join this set but are not persisted yet.)
+
+**Bookmarks and history** will live in a single SQLite database, owned by `engine` and surfaced by the UI, because both are queryable, filterable tables and it needs no server. Not yet implemented.
 
 - **Bookmarks** (the Library): name, frequency, mode, bandwidth, band, favorite flag, last-used time.
 - **Events** (the history): timestamp, type, source channel, decoded payload, and an optional reference to the IQ recording segment that produced it. Indexed by time, type, and channel for fast filtering.
-- **Layout and session state**: panel sizes, collapsed flags, and last active channel. This may live in SQLite or a small config file; to be decided.
 
-The data-flow side of this (the event bus writing to the store, tuning reading bookmarks) belongs in ARCHITECTURE as a short addition to the `engine` description.
+The data-flow side of the SQLite store (the event bus writing to it, tuning reading bookmarks) belongs in ARCHITECTURE as a short addition to the `engine` description.
 
 ---
 
@@ -149,5 +152,5 @@ The data-flow side of this (the event bus writing to the store, tuning reading b
 
 - **Events as workspace vs. tab.** Whether the full Events history warrants its own workspace in addition to the bottom-pane live feed, or whether one of the two is redundant. Current lean: keep both, with the tab as the live feed and the workspace as the searchable archive.
 - **Waveform placement.** Default location of the time-domain waveform: small in the inspect panel (current default) versus promoted into the center beside the waterfall.
-- **Layout state storage.** SQLite versus a config file for panel sizes and session state.
+- **Layout state storage.** Settled: UI/session settings persist in a `redb` KV store; SQLite is reserved for the queryable bookmarks/events tables. Panel-size persistence still needs wiring (subscribing to the resizable groups' resize events).
 - **Multi-channel display.** How the center behaves with several active channels: one shared spectrum with markers, or stacked per-channel strips. Settle once multi-channel is in use.

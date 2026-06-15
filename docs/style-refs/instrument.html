@@ -1,0 +1,188 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>SDR · Instrument</title>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600&display=swap" rel="stylesheet" />
+<style>
+  :root {
+    --bg: #04080b;
+    --panel: #07111a;
+    --panel-2: #0a1922;
+    --edge: rgba(120,180,190,0.16);
+    --edge-soft: rgba(120,180,190,0.10);
+    --txt: #cfe9e4;
+    --txt-2: #7fb0a8;
+    --txt-3: #4d7a76;
+    --trace: #4ff0c0;
+    --cyan: #38d6ff;
+    --amber: #ffc24a;
+    --rose: #ff6e7a;
+    --mono: "IBM Plex Mono", ui-monospace, Menlo, monospace;
+    --ui: "IBM Plex Sans", -apple-system, system-ui, sans-serif;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body { height: 100%; }
+  body { font-family: var(--ui); background: radial-gradient(135% 120% at 50% -10%, #07131b, #02070a 70%); color: var(--txt); font-size: 12.5px; overflow: hidden; }
+  .app { display: grid; grid-template-rows: 38px 1fr 40px; height: 100vh; }
+
+  .titlebar { display: flex; align-items: center; gap: 16px; padding: 0 14px; border-bottom: 1px solid var(--edge-soft); }
+  .nowfreq { font-family: var(--mono); color: var(--trace); font-size: 13px; font-variant-numeric: tabular-nums; }
+  .nowfreq .u { color: var(--txt-3); }
+  .status { display: flex; gap: 15px; color: var(--txt-2); font-size: 12px; }
+  .status b { color: var(--cyan); font-family: var(--mono); }
+  .spacer { flex: 1; }
+  .search { display: flex; align-items: center; gap: 8px; width: 260px; height: 25px; padding: 0 9px; border: 1px solid var(--edge); border-radius: 4px; background: var(--panel-2); color: var(--txt-3); }
+  .search svg { width: 13px; height: 13px; }
+  .search input { flex: 1; border: 0; background: transparent; color: var(--txt); font-family: var(--ui); font-size: 12px; outline: none; }
+  .search input::placeholder { color: var(--txt-3); }
+
+  .body { display: grid; grid-template-columns: 48px 1fr 262px; min-height: 0; }
+  .nav { display: flex; flex-direction: column; align-items: center; gap: 5px; padding-top: 11px; border-right: 1px solid var(--edge-soft); }
+  .nav button { width: 36px; height: 36px; border: 1px solid transparent; border-radius: 6px; background: transparent; color: var(--txt-3); cursor: pointer; display: grid; place-items: center; }
+  .nav button svg { width: 20px; height: 20px; }
+  .nav button.on { color: var(--trace); border-color: var(--edge); background: rgba(79,240,192,.06); }
+
+  .center { display: grid; grid-template-rows: 46px 1fr 144px; min-width: 0; min-height: 0; }
+  .tunehdr { display: flex; align-items: center; gap: 14px; padding: 0 16px; border-bottom: 1px solid var(--edge-soft); }
+  .bigfreq { font-family: var(--mono); color: var(--trace); font-size: 24px; letter-spacing: 1px; font-variant-numeric: tabular-nums; text-shadow: 0 0 14px rgba(79,240,192,.35); }
+  .bigfreq .lead { color: var(--txt-3); text-shadow: none; }
+  .bigfreq .u { font-family: var(--ui); font-size: 12px; color: var(--txt-2); margin-left: 7px; text-shadow: none; }
+  .level { margin-left: auto; display: flex; align-items: center; gap: 9px; color: var(--txt-3); font-size: 12px; }
+  .bar { width: 124px; height: 7px; border: 1px solid var(--edge); background: #04130f; position: relative; }
+  .bar > i { position: absolute; inset: 1px; right: 30%; background: linear-gradient(90deg, var(--trace), var(--cyan)); }
+  .level b { font-family: var(--mono); color: var(--txt-2); }
+
+  .plot { position: relative; min-height: 0; border-bottom: 1px solid var(--edge-soft); display: grid; grid-template-columns: 48px 1fr; }
+  .axis { border-right: 1px solid var(--edge-soft); position: relative; }
+  .axis span { position: absolute; right: 6px; font-family: var(--mono); font-size: 9.5px; color: var(--txt-3); transform: translateY(-50%); }
+  .stack { position: relative; display: grid; grid-template-rows: 40% 60%; min-height: 0; }
+  .stack canvas { width: 100%; height: 100%; display: block; }
+  .specwrap { position: relative; border-bottom: 1px solid var(--edge); }
+  .overlay { position: absolute; inset: 0; pointer-events: none;
+    background: repeating-linear-gradient(0deg, rgba(255,255,255,0.018) 0 1px, transparent 1px 3px); }
+  .band { position: absolute; top: 0; bottom: 0; left: 49%; width: 2%; background: rgba(56,214,255,0.08); border-inline: 1px solid rgba(56,214,255,.4); }
+  .center-mark { position: absolute; top: 0; bottom: 0; left: 50%; width: 1px; background: var(--amber); box-shadow: 0 0 5px var(--amber); }
+  .readout { position: absolute; top: 8px; right: 10px; font-family: var(--mono); font-size: 11px; color: var(--cyan); background: rgba(4,8,11,.72); border: 1px solid var(--edge); border-radius: 4px; padding: 3px 7px; }
+
+  .bottom { display: grid; grid-template-rows: 30px 1fr; min-height: 0; }
+  .tabs { display: flex; gap: 16px; align-items: center; padding: 0 16px; border-bottom: 1px solid var(--edge-soft); }
+  .tabs button { border: 0; background: transparent; color: var(--txt-2); font-family: var(--ui); font-size: 12.5px; padding: 6px 0; cursor: pointer; border-bottom: 2px solid transparent; }
+  .tabs button.on { color: var(--trace); border-bottom-color: var(--trace); }
+  .tabbody { overflow: auto; padding: 7px 16px; font-size: 12.5px; }
+  .row { display: grid; grid-template-columns: 72px 64px 1fr 60px; gap: 12px; padding: 4px 0; color: var(--txt-2); }
+  .row .t { font-family: var(--mono); color: var(--txt-3); font-size: 12px; }
+  .row .k { color: var(--cyan); } .row b { color: var(--txt); } .row .m { font-family: var(--mono); text-align: right; color: var(--txt-3); }
+
+  .inspect { border-left: 1px solid var(--edge-soft); background: var(--panel); display: flex; flex-direction: column; min-height: 0; }
+  .inspect h3 { font-size: 12px; font-weight: 600; color: var(--txt); padding: 12px 14px 6px; }
+  .inspect h3 small { font-weight: 400; color: var(--txt-3); }
+  .seg { display: flex; margin: 0 13px 10px; border: 1px solid var(--edge); border-radius: 5px; overflow: hidden; }
+  .seg button { flex: 1; border: 0; border-right: 1px solid var(--edge-soft); background: transparent; color: var(--txt-2); font-size: 11.5px; padding: 6px 0; cursor: pointer; }
+  .seg button:last-child { border-right: 0; }
+  .seg button.on { background: rgba(79,240,192,.1); color: var(--trace); }
+  .wave { margin: 0 13px 10px; height: 54px; border: 1px solid var(--edge); border-radius: 5px; background: #04130f; }
+  .stats { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; padding: 0 13px 10px; }
+  .stat { border: 1px solid var(--edge); border-radius: 5px; padding: 8px 10px; background: var(--panel-2); }
+  .stat label { font-size: 11px; color: var(--txt-3); display: block; margin-bottom: 3px; }
+  .stat b { font-family: var(--mono); font-size: 16px; color: var(--cyan); }
+  .settings { padding: 2px 13px 12px; overflow: auto; }
+  .field { display: flex; justify-content: space-between; align-items: center; padding: 6px 0; }
+  .field label { font-size: 12px; color: var(--txt-2); }
+  .dd { font-family: var(--mono); font-size: 11.5px; color: var(--trace); border: 1px solid var(--edge); border-radius: 4px; padding: 4px 9px; }
+
+  .transport { display: flex; align-items: center; gap: 14px; padding: 0 16px; border-top: 1px solid var(--edge-soft); }
+  .tbtn { width: 30px; height: 24px; border: 1px solid var(--edge); border-radius: 5px; background: var(--panel-2); color: var(--txt-2); cursor: pointer; display: grid; place-items: center; }
+  .tbtn svg { width: 14px; height: 14px; }
+  .scrub { flex: 1; height: 8px; border: 1px solid var(--edge); background: #04130f; position: relative; }
+  .scrub > i { position: absolute; left: 0; top: 0; bottom: 0; width: 64%; background: linear-gradient(90deg, rgba(79,240,192,.12), rgba(79,240,192,.3)); }
+  .scrub > b { position: absolute; left: 64%; top: -2px; width: 2px; height: 12px; background: var(--trace); box-shadow: 0 0 5px var(--trace); }
+  .tlabel { font-family: var(--mono); font-size: 11px; color: var(--txt-2); }
+  .rec { display: flex; align-items: center; gap: 6px; font-size: 11.5px; color: var(--txt-2); }
+  .rec i { width: 8px; height: 8px; border-radius: 50%; background: var(--rose); }
+</style>
+</head>
+<body>
+<div class="app">
+  <div class="titlebar">
+    <span class="nowfreq">133.700 <span class="u">MHz</span></span>
+    <span class="status"><span>AM</span><span>bandwidth <b>12k</b></span><span>gain <b>28</b></span></span>
+    <span class="spacer"></span>
+    <label class="search"><span data-icon="search"></span><input placeholder="Search frequencies, bookmarks…" /></label>
+  </div>
+
+  <div class="body">
+    <div class="nav">
+      <button class="on" data-icon="listen"></button>
+      <button data-icon="library"></button>
+      <button data-icon="recordings"></button>
+      <button data-icon="settings"></button>
+    </div>
+
+    <div class="center">
+      <div class="tunehdr">
+        <div class="bigfreq"><span class="lead">00</span>133.700 000<span class="u">MHz</span></div>
+        <div class="level">Level <div class="bar"><i></i></div><b>−21 dB</b></div>
+      </div>
+
+      <div class="plot">
+        <div class="axis" id="axis"></div>
+        <div class="stack">
+          <div class="specwrap"><canvas id="spec"></canvas></div>
+          <canvas id="wf"></canvas>
+          <div class="overlay"><div class="band"></div><div class="center-mark"></div><div class="readout">133.642 MHz · 2.4s ago</div></div>
+        </div>
+      </div>
+
+      <div class="bottom">
+        <div class="tabs"><button class="on">Decoder</button><button>Events</button><button>Channels</button></div>
+        <div class="tabbody">
+          <div class="row"><span class="t">14:02:11</span><span class="k">ADS-B</span><span><b>AC123</b>  FL390 · 270° · 481 kt</span><span class="m">−18dB</span></div>
+          <div class="row"><span class="t">14:01:54</span><span class="k">433</span><span><b>Acurite 0x3f</b>  21.4°C · 58% RH</span><span class="m">ok</span></div>
+          <div class="row"><span class="t">14:01:03</span><span class="k">Pager</span><span><b>148.350</b>  “call ext 4471”</span><span class="m">1200</span></div>
+          <div class="row"><span class="t">13:59:40</span><span class="k">AIS</span><span><b>Bay Queen</b>  316… · 12.3 kn · 088°</span><span class="m">—</span></div>
+        </div>
+      </div>
+    </div>
+
+    <div class="inspect">
+      <h3>Inspect <small>· demodulated</small></h3>
+      <div class="seg"><button>IQ</button><button>Baseband</button><button class="on">Demod</button><button>Bits</button></div>
+      <canvas class="wave" id="iwave"></canvas>
+      <div class="stats"><div class="stat"><label>Signal-to-noise</label><b>18 dB</b></div><div class="stat"><label>Bandwidth</label><b>12 kHz</b></div></div>
+      <h3>Display</h3>
+      <div class="settings">
+        <div class="field"><label>Resolution</label><span class="dd">4096</span></div>
+        <div class="field"><label>Window</label><span class="dd">Hann</span></div>
+        <div class="field"><label>Colors</label><span class="dd">Phosphor</span></div>
+        <div class="field"><label>Frame rate</label><span class="dd">30 fps</span></div>
+        <div class="field"><label>Smoothing</label><span class="dd">Medium</span></div>
+        <div class="field"><label>Range</label><span class="dd">Auto</span></div>
+      </div>
+    </div>
+  </div>
+
+  <div class="transport">
+    <button class="tbtn" data-icon="prev"></button>
+    <button class="tbtn" data-icon="play"></button>
+    <button class="tbtn" data-icon="next"></button>
+    <div class="scrub"><i></i><b></b></div>
+    <span class="tlabel">−12s</span>
+    <span class="rec"><i></i> Recording</span>
+    <span class="tlabel">44.1 kHz</span>
+  </div>
+</div>
+
+<script>
+window.THEME = {
+  cmap: [[0,3,12,14],[0.32,4,46,46],[0.56,10,120,118],[0.74,79,240,192],[0.9,56,214,255],[1,210,255,244]],
+  line: "rgba(79,240,192,1)", glow: "rgba(79,240,192,0.85)", graticule: true,
+  grid: "rgba(120,180,190,0.13)", bg: "#04080b", lineWidth: 1.5,
+};
+</script>
+<script src="signal.js"></script>
+</body>
+</html>

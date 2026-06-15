@@ -32,6 +32,14 @@ rustfft = "6.4"
 # the versions gpui resolves so the Frame type unifies.
 image = "0.25"
 
+# App-side persistence: UI/session settings in an embedded KV store under the platform
+# app-support dir, serialized with serde. SQLite is reserved for the future bookmarks/events
+# tables (see docs/UI.md).
+redb = "4.1.0"
+directories = "6.0.0"
+serde = { version = "1.0.228", features = ["derive"] }
+serde_json = "1.0.150"
+
 # GPUI + gpui-component.
 #
 # gpui-component declares its `gpui` deps against zed's *default branch* (no rev). We must

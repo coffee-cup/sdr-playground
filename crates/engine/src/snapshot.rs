@@ -19,6 +19,9 @@ pub struct Snapshot {
     pub mean_dbfs: f32,
     /// `peak_power` as dB relative to full scale.
     pub peak_dbfs: f32,
+    /// Inclusive frequency range (Hz) the source can tune to, for clamping UI tuning.
+    pub tune_min: u64,
+    pub tune_max: u64,
     /// `false` once the source reaches EOF, is stopped, or errors.
     pub running: bool,
 }
@@ -34,6 +37,8 @@ impl Snapshot {
             peak_power: 0.0,
             mean_dbfs: f32::NEG_INFINITY,
             peak_dbfs: f32::NEG_INFINITY,
+            tune_min: 0,
+            tune_max: u64::MAX,
             running: true,
         }
     }

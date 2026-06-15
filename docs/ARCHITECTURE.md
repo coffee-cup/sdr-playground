@@ -80,7 +80,7 @@ This makes the `Source` trait the most important boundary in the system. With it
 
 **Realtime core (dedicated threads, no async):**
 
-- A reader thread loops on `source.read()` and writes into the pre-trigger ring and the broadcast. A device source blocks on USB; a file source paces to real time. (Today the reader also computes the wideband FFT inline and publishes the spectrum/waveform taps directly: the FFT is the stream's only consumer, so the broadcast fan-out and DSP pool below are deferred until the first Channel needs them — adding them now would be indirection with no second consumer to pay for it.)
+- A reader thread loops on `source.read()` and writes into the pre-trigger ring and the broadcast. A device source blocks on USB; a file source paces to real time. (Today the reader also computes the wideband FFT inline and publishes the spectrum/waveform taps directly: the FFT is the stream's only consumer, so the broadcast fan-out and DSP pool below are deferred until the first Channel needs them — adding them now would be indirection with no second consumer to pay for it.) Control messages are applied between reads, so changes take effect without restarting the thread or reopening the device: retune (`Tune`), reconfigure the spectrum analyzer's FFT size/window (`SetSpectrum`), and change the publish/waterfall-row rate (`SetFps`).
 - A DSP pool processes active channels as work units. Multi-core parallelism occurs here: multiple channels, or multiple decoders' compute, run on separate cores, while a single channel runs as straight-line code with no internal threading overhead.
 - The audio callback pulls mixed samples from a ring and must always have data available. The rest of the core exists to keep that ring full.
 
@@ -131,6 +131,7 @@ trait Source: Send {
     fn sample_rate(&self) -> u32;
     fn center_freq(&self) -> u64;
     fn tune(&mut self, hz: u64) -> Result<()>;          // file source: updates reported freq
+    fn tune_range(&self) -> (u64, u64);                  // tunable Hz range; UI clamps to it
     fn read(&mut self, out: &mut [Iq]) -> Result<usize>; // Ok(0) = end of stream (EOF)
 }
 

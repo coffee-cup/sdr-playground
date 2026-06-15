@@ -5,9 +5,13 @@ use gpui_component_assets::Assets;
 mod app;
 mod colormap;
 mod components;
+mod controls;
 mod nav;
 mod radio;
+mod settings;
 mod signal;
+mod store;
+mod ui;
 mod workspaces;
 
 use app::SdrApp;
