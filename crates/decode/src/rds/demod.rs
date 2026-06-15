@@ -49,7 +49,7 @@ pub struct Demod {
     acq_n: u32,
     acq_sum: Iq,
     acq_prev_y2: Iq,
-    /// Boxcar matched filter over one chip.
+    /// Root-raised-cosine matched filter for the chip pulse.
     mf: Vec<Iq>,
     mf_taps: Vec<f32>,
     mf_pos: usize,
@@ -176,7 +176,7 @@ impl Demod {
     /// recover chip timing (Gardner), and biphase-decode chips into data bits.
     fn push_baseband(&mut self, sample: Iq, bits: &mut Vec<u8>) {
         let sample = self.carrier(sample);
-        // Boxcar matched filter over one chip.
+        // Root-raised-cosine matched filter for the chip pulse.
         self.mf[self.mf_pos] = sample;
         self.mf_pos = (self.mf_pos + 1) % self.mf.len();
         let mut acc = Iq::default();

@@ -1,12 +1,13 @@
 //! The runtime. Owns the reader thread that pulls IQ from a [`Source`], computes live signal
 //! stats and a wideband spectrum, and publishes them through lock-free taps. UI-agnostic, with
-//! the source injected — `app` and `cli` are interchangeable consumers. See `docs/ARCHITECTURE.md`.
+//! the source injected — `app`, `cli`, and `scanner` are interchangeable consumers. See
+//! `docs/ARCHITECTURE.md`.
 //!
-//! This is the realtime-core foundation: the reader thread is the producer. It uses plain
-//! threads, not async — the orchestration layer (tokio) arrives with decoders and the event
-//! bus. The wideband FFT runs inline on the reader thread for now; it is the only consumer of
-//! the stream, so the broadcast fan-out and DSP pool are deliberately deferred until the first
-//! Channel needs them (see ARCHITECTURE "Concurrency model").
+//! The reader thread is the realtime producer: it computes the wideband FFT inline and pushes
+//! raw IQ into a lock-free ring. A decode worker thread drains that ring, runs each active
+//! `Channel`, and forwards decoded events over an `mpsc` bus. Both are plain threads, not async;
+//! tokio is deferred until genuinely async orchestration (network export, disk recording) needs
+//! it (see ARCHITECTURE "Concurrency model").
 
 mod channel;
 mod frame;

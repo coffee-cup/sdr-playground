@@ -12,7 +12,6 @@ use crate::Event;
 pub struct Groups {
     /// Info words for the current group by position; `None` if that block failed its check.
     blocks: [Option<u16>; 4],
-    have: u8,
     ps: PsBuffer,
     rt: RtBuffer,
     last_pi: Option<u16>,
@@ -33,7 +32,6 @@ impl Groups {
     pub fn new() -> Self {
         Self {
             blocks: [None; 4],
-            have: 0,
             ps: PsBuffer::new(),
             rt: RtBuffer::new(),
             last_pi: None,
@@ -62,12 +60,10 @@ impl Groups {
     pub fn push_block(&mut self, block: Block, out: &mut Vec<Event>) {
         let pos = Self::position(block.offset);
         self.blocks[pos] = block.ok.then_some(block.info);
-        self.have |= 1 << pos;
 
         if pos == 3 {
             self.parse(out);
             self.blocks = [None; 4];
-            self.have = 0;
         }
     }
 
