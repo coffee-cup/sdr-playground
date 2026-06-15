@@ -49,7 +49,10 @@ pub fn run(scanner: Scanner) -> io::Result<()> {
 }
 
 const HEADERS: [&str; 4] = ["Freq", "Station", "Type", "Now Playing"];
-/// Per-column maximum width; the column shrinks to its content but never grows past this.
+/// Per-column minimum width, so the table starts at a comfortable size before stations fill in
+/// rather than collapsing to the header text.
+const COL_MINS: [usize; 4] = [7, 12, 14, 28];
+/// Per-column maximum width; the column grows with its content up to here, then truncates.
 const COL_CAPS: [usize; 4] = [7, 18, 18, 48];
 
 fn draw(
@@ -74,7 +77,11 @@ fn draw(
     let widths: Vec<u16> = (0..4)
         .map(|i| {
             let content = stations.iter().map(|s| cell(s, i).chars().count()).max();
-            content.unwrap_or(0).max(HEADERS[i].len()).min(COL_CAPS[i]) as u16
+            content
+                .unwrap_or(0)
+                .max(HEADERS[i].len())
+                .max(COL_MINS[i])
+                .min(COL_CAPS[i]) as u16
         })
         .collect();
 
@@ -121,7 +128,7 @@ fn draw(
             Style::new().fg(Color::Gray)
         };
         Row::new([
-            Cell::from(cell(s, 0)).style(Style::new().fg(Color::DarkGray)),
+            Cell::from(cell(s, 0)).style(Style::new().fg(Color::White)),
             Cell::from(cell(s, 1))
                 .style(Style::new().fg(Color::Green).add_modifier(Modifier::BOLD)),
             Cell::from(cell(s, 2)).style(Style::new().fg(Color::Blue)),
