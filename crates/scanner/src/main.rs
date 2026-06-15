@@ -67,9 +67,12 @@ struct ScanArgs {
     /// Tuner gain: `auto` or dB.
     #[arg(long, value_parser = parse_gain, default_value = "40")]
     gain: Gain,
-    /// Dwell per window, seconds (RDS needs several seconds to deliver PS/RadioText).
+    /// Max dwell per window, seconds (a cap; the scan leaves earlier once stations stop updating).
     #[arg(long, default_value_t = 12.0)]
     dwell: f64,
+    /// Leave a window after this many seconds with no new station info (adaptive dwell).
+    #[arg(long, default_value_t = 2.0)]
+    quiet: f64,
     /// Print the station table to stdout instead of the TUI (headless logging).
     #[arg(long)]
     print: bool,
@@ -158,13 +161,15 @@ fn scan(args: ScanArgs) -> Result<(), String> {
         Region::Us,
         args.rate,
         Duration::from_secs_f64(args.dwell),
+        Duration::from_secs_f64(args.quiet),
     );
 
     if !args.print {
         return sdr_scanner::tui::run(scanner).map_err(|e| e.to_string());
     }
 
-    // Headless: sweep windows (optionally from `start`) and print decoded stations after each.
+    // Headless: one pass over every window (optionally from `start`), printing per-window timing
+    // and a final table. Self-timing so it doubles as the scan benchmark.
     let stop = install_ctrlc();
     let table = scanner.table();
     let windows: Vec<_> = scanner
@@ -173,29 +178,45 @@ fn scan(args: ScanArgs) -> Result<(), String> {
         .filter(|w| args.start.is_none_or(|s| w.center >= s))
         .cloned()
         .collect();
+    let scan_start = Instant::now();
     for w in &windows {
         if stop.load(Ordering::SeqCst) {
             break;
         }
-        eprintln!(
-            "tuning {:.1} MHz ({} stations) ...",
-            w.center as f64 / 1e6,
-            w.stations.len()
-        );
+        let before = table.stations().len();
+        let wstart = Instant::now();
         scanner.dwell_window(w, &stop);
-        for s in table
-            .stations()
-            .iter()
-            .filter(|s| s.program_service.is_some())
-        {
-            println!(
-                "{:7.1} MHz  {:8}  {}",
-                s.freq as f64 / 1e6,
-                s.program_service.as_deref().unwrap_or(""),
-                s.radiotext.as_deref().unwrap_or(""),
-            );
-        }
+        eprintln!(
+            "{:6.1} MHz  {:>4} slots  {:5.1}s  (+{} stations)",
+            w.center as f64 / 1e6,
+            w.stations.len(),
+            wstart.elapsed().as_secs_f64(),
+            table.stations().len() - before,
+        );
     }
+
+    let stations = table.stations();
+    let with_ps: Vec<_> = stations
+        .iter()
+        .filter(|s| s.program_service.is_some())
+        .collect();
+    println!("---");
+    for s in &with_ps {
+        println!(
+            "{:7.1} MHz  {:8}  {}",
+            s.freq as f64 / 1e6,
+            s.program_service.as_deref().unwrap_or(""),
+            s.radiotext.as_deref().unwrap_or(""),
+        );
+    }
+    let with_rt = with_ps.iter().filter(|s| s.radiotext.is_some()).count();
+    eprintln!(
+        "--- swept {} windows in {:.1}s: {} stations ({} with RadioText)",
+        windows.len(),
+        scan_start.elapsed().as_secs_f64(),
+        with_ps.len(),
+        with_rt,
+    );
     Ok(())
 }
 

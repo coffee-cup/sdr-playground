@@ -54,3 +54,21 @@ gpui = { git = "https://github.com/zed-industries/zed" }
 gpui_platform = { git = "https://github.com/zed-industries/zed", features = ["font-kit"] }
 gpui-component = { git = "https://github.com/longbridge/gpui-component", rev = "6dfb32cd2c5e1bd6f86ce758398580f42d49970f" }
 gpui-component-assets = { git = "https://github.com/longbridge/gpui-component", rev = "6dfb32cd2c5e1bd6f86ce758398580f42d49970f" }
+
+# The DSP/decode crates run tight per-sample loops (NCO mixing, FIR decimation, FM and RDS
+# demodulation). At opt-level 0 a single channel only just reaches realtime, so the scanner
+# (several channels per window) cannot keep up and the decode tests take ~48s. Optimizing
+# just these small, rarely-step-debugged crates lets one core decode ~19 stations in realtime;
+# the app/UI crates stay at the default for fast compiles and easy debugging.
+[profile.dev.package.sdr-dsp]
+opt-level = 2
+[profile.dev.package.sdr-decode]
+opt-level = 2
+[profile.dev.package.sdr-engine]
+opt-level = 2
+
+# `cargo test` builds the crate under test with the `test` profile (not `dev`), and per-package
+# `dev` overrides do not carry over. The heavy tests live in `sdr-decode`, so it needs this too;
+# its `sdr-dsp` dependency is still built with the `dev` profile above.
+[profile.test.package.sdr-decode]
+opt-level = 2

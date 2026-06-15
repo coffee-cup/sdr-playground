@@ -45,7 +45,7 @@ tune (NCO freq shift to baseband) → low-pass + decimate → FM demodulate → 
 
 Each stage is cheap and composable. Tuning is a complex multiply by the station's offset from the window center, which also moves the station off the RTL-SDR DC spike (a one-pole DC blocker mops up the rest). Decimation discards unused bandwidth: the decoder runs on a ~240 kHz multiplex rather than the full capture rate. The decoder tail consumes the demodulated multiplex and emits events, decoupled from the realtime path.
 
-Scanning the whole FM band uses this: a single RTL-SDR sees ~1-2 MHz at once, so the scanner plans a set of windows covering 88–108 MHz, and for each window registers one channel per station in view, dwells long enough for RDS to arrive, then retunes to the next window.
+Scanning the whole FM band uses this: a single RTL-SDR sees ~1-2 MHz at once, so the scanner plans a set of windows covering 88–108 MHz, and for each window registers one channel per station in view, dwells adaptively (leaving a window once it stops yielding new RDS, so empty stretches of the band are abandoned in a couple of seconds instead of burning a fixed dwell), then retunes to the next window.
 
 ---
 
@@ -186,6 +186,8 @@ The division is deliberate: buy the plumbing, build the signal processing. Hardw
 **Buy, plumbing.** `rtrb` for the lock-free SPSC IQ ring between the reader and the decode worker; `ratatui` + `crossterm` for the scanner TUI.
 
 **Build, everything else.** The tuner (complex NCO), FIR filtering and decimation, demodulators (AM/FM/SSB), AGC, and the decoder-side work (clock/symbol recovery, framing, parity). These live in `dsp` and `decode`. They are small, and implementing them is where the project's learning value lies.
+
+**Build profile.** `dsp`, `decode`, and `engine` are compiled at `opt-level = 2` even in dev/test builds (a per-package override in the root `Cargo.toml`). Their tight per-sample loops are ~20x slower unoptimized: at opt-level 0 a single channel only just reaches realtime, so the scanner cannot keep up and the decode tests take ~48s. The app and UI crates keep the default opt-level for fast incremental compiles and easy debugging.
 
 ---
 

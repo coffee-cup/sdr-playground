@@ -5,6 +5,13 @@ use std::sync::{Arc, Mutex};
 
 use sdr_engine::{pty_name, ChannelEvent, Event, RdsEvent};
 
+/// Set `field` to `val`, returning whether that changed its value.
+fn set_changed<T: PartialEq>(field: &mut Option<T>, val: T) -> bool {
+    let changed = field.as_ref() != Some(&val);
+    *field = Some(val);
+    changed
+}
+
 /// Accumulated knowledge about one station.
 #[derive(Debug, Clone)]
 pub struct Station {
@@ -44,16 +51,19 @@ impl StationTable {
     }
 
     /// Fold a tagged event into the table. `center` is the tuned frequency the event's channel
-    /// offset is relative to.
-    pub fn apply(&self, center: u64, ev: &ChannelEvent) {
+    /// offset is relative to. Returns whether this added genuinely new information (a new field
+    /// or a changed value), which the scan loop uses to decide when a window has gone quiet.
+    pub fn apply(&self, center: u64, ev: &ChannelEvent) -> bool {
         let freq = (center as i64 + ev.offset_hz as i64).max(0) as u64;
         let mut table = self.inner.lock().unwrap();
         let s = table.entry(freq).or_insert_with(|| Station::new(freq));
         match &ev.event {
-            Event::Rds(RdsEvent::Pi(v)) => s.pi = Some(*v),
-            Event::Rds(RdsEvent::ProgramType(p)) => s.pty = Some(*p),
-            Event::Rds(RdsEvent::ProgramService(ps)) => s.program_service = Some(ps.clone()),
-            Event::Rds(RdsEvent::RadioText(rt)) => s.radiotext = Some(rt.clone()),
+            Event::Rds(RdsEvent::Pi(v)) => set_changed(&mut s.pi, *v),
+            Event::Rds(RdsEvent::ProgramType(p)) => set_changed(&mut s.pty, *p),
+            Event::Rds(RdsEvent::ProgramService(ps)) => {
+                set_changed(&mut s.program_service, ps.clone())
+            }
+            Event::Rds(RdsEvent::RadioText(rt)) => set_changed(&mut s.radiotext, rt.clone()),
         }
     }
 

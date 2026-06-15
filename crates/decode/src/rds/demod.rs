@@ -484,4 +484,60 @@ mod tests {
             );
         }
     }
+
+    /// Manual throughput probe (ignored), not a correctness gate. Mirrors `engine::Channel`
+    /// (NCO -> FIR decimate -> DC block -> FM demod -> RDS decode) at the scanner's capture rate,
+    /// so the printed "Nx realtime" is roughly how many stations one core can decode live.
+    /// Run: `cargo test -p sdr-decode --release -- --ignored --nocapture channel_throughput`
+    #[test]
+    #[ignore]
+    fn channel_throughput() {
+        use sdr_core::Iq;
+        use sdr_dsp::{lowpass, FirDecimator, FmDemod, Nco};
+
+        let fs = 1_024_000u32; // RTL-SDR window rate the scanner uses
+        let offset = 250_000.0f64; // station offset within the window
+
+        // RDS-bearing multiplex at the capture rate, FM-modulated onto a carrier at `offset`.
+        let mpx = synth_mpx(&ps_groups(0x4D54), fs, 12, SYMBOL_RATE, 57_000.0);
+        let mut iq = vec![Iq::default(); mpx.len()];
+        let (mut phase, kf) = (0.0f32, 0.25f32);
+        let w = TAU * offset as f32 / fs as f32;
+        for (n, (s, m)) in iq.iter_mut().zip(&mpx).enumerate() {
+            phase += kf * *m;
+            let a = w * n as f32 + phase;
+            *s = Iq::new(a.cos(), a.sin());
+        }
+
+        // Channel front-end, identical to engine::Channel::new.
+        let decim = (fs as f32 / 240_000.0).round().max(1.0) as usize;
+        let mut nco = Nco::new(-offset, fs);
+        let mut lpf = FirDecimator::new(lowpass(127, 0.45 / decim as f32), decim);
+        let mut fm = FmDemod::new(1.0);
+        let mut dec = RdsDecoder::new(fs / decim as u32);
+        let mut dc = Iq::default();
+        let (mut shifted, mut baseband, mut demod) = (Vec::new(), Vec::new(), Vec::new());
+
+        let start = std::time::Instant::now();
+        for block in iq.chunks(16_384) {
+            shifted.resize(block.len(), Iq::default());
+            nco.mix(block, &mut shifted);
+            baseband.clear();
+            lpf.process(&shifted, &mut baseband);
+            for b in &mut baseband {
+                dc += (*b - dc) * 1e-4;
+                *b -= dc;
+            }
+            demod.clear();
+            fm.process(&baseband, &mut demod);
+            dec.feed(&demod);
+        }
+        let elapsed = start.elapsed().as_secs_f32();
+        let sig = iq.len() as f32 / fs as f32;
+        println!(
+            "CHANNEL_THROUGHPUT: {sig:.2}s signal in {elapsed:.3}s => {:.1}x realtime (~{:.0} stations/core)",
+            sig / elapsed,
+            sig / elapsed
+        );
+    }
 }

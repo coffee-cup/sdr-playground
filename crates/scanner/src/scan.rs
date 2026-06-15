@@ -18,19 +18,29 @@ pub struct Scanner {
     engine: Engine,
     windows: Vec<Window>,
     table: StationTable,
+    /// Hard cap on time spent per window.
     dwell: Duration,
+    /// Leave a window early once it has gone this long with no new station info.
+    quiet: Duration,
     /// Center frequency of the window currently being scanned (for the UI).
     current: Arc<AtomicU64>,
 }
 
 impl Scanner {
-    pub fn new(engine: Engine, region: Region, sample_rate: u32, dwell: Duration) -> Self {
+    pub fn new(
+        engine: Engine,
+        region: Region,
+        sample_rate: u32,
+        dwell: Duration,
+        quiet: Duration,
+    ) -> Self {
         let windows = plan_windows(&region.channels(), sample_rate);
         Self {
             engine,
             windows,
             table: StationTable::new(),
             dwell,
+            quiet,
             current: Arc::new(AtomicU64::new(0)),
         }
     }
@@ -55,13 +65,25 @@ impl Scanner {
         let specs: Vec<ChannelSpec> = w.offsets().into_iter().map(ChannelSpec::rds).collect();
         self.engine.set_channels(specs);
 
-        // Drop the settle period, then collect for the rest of the dwell.
+        // Drop the settle period, then discard whatever arrived during the retune.
         thread::sleep(SETTLE.min(self.dwell));
         let _ = self.engine.drain_events();
-        let deadline = Instant::now() + self.dwell;
-        while Instant::now() < deadline && !stop.load(Ordering::SeqCst) {
+
+        // Adaptive dwell: keep listening while new station info arrives, but leave after `quiet`
+        // with nothing new (an empty or fully-decoded window) and never exceed `dwell`. This is
+        // what makes a full sweep fast: most windows are empty or settle in a few seconds, so we
+        // do not burn the whole cap on dead air.
+        let start = Instant::now();
+        let mut last_progress = start;
+        while !stop.load(Ordering::SeqCst) && start.elapsed() < self.dwell {
+            let mut progressed = false;
             for ev in self.engine.drain_events() {
-                self.table.apply(w.center, &ev);
+                progressed |= self.table.apply(w.center, &ev);
+            }
+            if progressed {
+                last_progress = Instant::now();
+            } else if last_progress.elapsed() >= self.quiet {
+                break;
             }
             thread::sleep(Duration::from_millis(50));
         }

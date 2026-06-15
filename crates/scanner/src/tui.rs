@@ -7,7 +7,7 @@ use std::sync::Arc;
 use std::thread;
 use std::time::Duration;
 
-use crossterm::event::{self, Event, KeyCode};
+use crossterm::event::{self, Event, KeyCode, KeyModifiers};
 use ratatui::layout::{Constraint, Layout};
 use ratatui::style::Stylize;
 use ratatui::widgets::{Block, Paragraph, Row, Table};
@@ -31,7 +31,10 @@ pub fn run(scanner: Scanner) -> io::Result<()> {
         }
         if event::poll(Duration::from_millis(250))? {
             if let Event::Key(k) = event::read()? {
-                if matches!(k.code, KeyCode::Char('q') | KeyCode::Esc) {
+                // Raw mode suppresses SIGINT, so Ctrl+C arrives here as a key, not a signal.
+                let ctrl_c =
+                    k.code == KeyCode::Char('c') && k.modifiers.contains(KeyModifiers::CONTROL);
+                if ctrl_c || matches!(k.code, KeyCode::Char('q') | KeyCode::Esc) {
                     break Ok(());
                 }
             }
