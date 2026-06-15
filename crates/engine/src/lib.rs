@@ -21,11 +21,9 @@ use arc_swap::ArcSwap;
 use sdr_device::rtlsdr::DEFAULT_READ_SAMPLES;
 use sdr_dsp::SpectrumAnalyzer;
 
-pub use channel::ChannelSpec;
+pub use channel::{Channel, ChannelSpec};
 pub use frame::{SpectrumFrame, Tap, WaveformFrame};
 pub use snapshot::Snapshot;
-
-use channel::Channel;
 
 // Re-exported so front-ends that depend only on `engine` can construct sources and configure
 // the pipeline.
