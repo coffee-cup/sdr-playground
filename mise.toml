@@ -50,3 +50,18 @@ depends = ["fmt-check", "clippy"]
 [tasks.ci]
 description = "Full CI: check + test"
 depends = ["check", "test"]
+
+# Validation. `validate` is the full no-device check (lint + all tests, including the recorded
+# RDS fixture). `validate-live` decodes a real station off a plugged-in RTL-SDR (set
+# SDR_LIVE_FREQ_HZ to pick it); it skips cleanly if no device is present.
+[tasks.validate]
+description = "Validate everything that needs no device (lint + tests + golden fixture)"
+depends = ["ci"]
+
+[tasks.validate-live]
+description = "Validate live decode against a plugged-in RTL-SDR (SDR_LIVE_FREQ_HZ to choose station)"
+run = "cargo test -p sdr-engine --release --test live -- --ignored --nocapture"
+
+[tasks.bench]
+description = "Decode-throughput benchmarks (criterion), replaying the recorded fixture"
+run = "cargo bench -p sdr-engine"
