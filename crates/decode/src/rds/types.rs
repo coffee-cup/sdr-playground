@@ -19,6 +19,13 @@ pub enum RdsEvent {
         title: Option<String>,
         artist: Option<String>,
     },
+    /// Long PS (RDS2 group 15A): a UTF-8 station name up to 32 characters, longer than the
+    /// classic 8-character [`ProgramService`](RdsEvent::ProgramService).
+    LongProgramService(String),
+    /// Program Type Name (group 10A): an 8-character free-form label refining the PTY genre.
+    ProgramTypeName(String),
+    /// Clock-time and date (group 4A): the station's time as an ISO-8601 string with UTC offset.
+    ClockTime(String),
 }
 
 /// RBDS (North American) program-type names, indexed by the 5-bit PTY code. The European RDS

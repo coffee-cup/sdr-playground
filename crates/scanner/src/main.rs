@@ -142,6 +142,9 @@ fn probe(args: ProbeArgs) -> Result<(), String> {
                     title = t.or(title);
                     artist = a.or(artist);
                 }
+                Event::Rds(RdsEvent::LongProgramService(s)) => println!("  LongPS: {s:?}"),
+                Event::Rds(RdsEvent::ProgramTypeName(s)) => println!("  PTYN: {s:?}"),
+                Event::Rds(RdsEvent::ClockTime(s)) => println!("  CT: {s}"),
             }
         }
         std::thread::sleep(Duration::from_millis(100));
@@ -207,26 +210,23 @@ fn scan(args: ScanArgs) -> Result<(), String> {
     }
 
     let stations = table.stations();
-    let with_ps: Vec<_> = stations
-        .iter()
-        .filter(|s| s.program_service.is_some())
-        .collect();
+    let named: Vec<_> = stations.iter().filter(|s| s.name().is_some()).collect();
     println!("---");
-    for s in &with_ps {
+    for s in &named {
         println!(
             "{:7.1} MHz  {:8}  {}",
             s.freq as f64 / 1e6,
-            s.program_service.as_deref().unwrap_or(""),
+            s.name().unwrap_or(""),
             s.now_playing().unwrap_or_default(),
         );
     }
-    let with_rt = with_ps.iter().filter(|s| s.radiotext.is_some()).count();
+    let with_song = named.iter().filter(|s| s.now_playing().is_some()).count();
     eprintln!(
-        "--- swept {} windows in {:.1}s: {} stations ({} with RadioText)",
+        "--- swept {} windows in {:.1}s: {} stations ({} with now-playing text)",
         windows.len(),
         scan_start.elapsed().as_secs_f64(),
-        with_ps.len(),
-        with_rt,
+        named.len(),
+        with_song,
     );
     Ok(())
 }

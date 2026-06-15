@@ -23,6 +23,12 @@ pub struct Station {
     /// Structured now-playing from RT+ (when the station sends it), carved out of the RadioText.
     pub title: Option<String>,
     pub artist: Option<String>,
+    /// Long PS (RDS2): a station name longer than the 8-char PS, when broadcast.
+    pub long_ps: Option<String>,
+    /// PTYN: a free-form refinement of the program-type genre.
+    pub ptyn: Option<String>,
+    /// The station's clock (ISO-8601), when broadcast.
+    pub clock: Option<String>,
 }
 
 impl Station {
@@ -35,6 +41,9 @@ impl Station {
             radiotext: None,
             title: None,
             artist: None,
+            long_ps: None,
+            ptyn: None,
+            clock: None,
         }
     }
 
@@ -46,6 +55,16 @@ impl Station {
             (None, Some(t)) => Some(t.clone()),
             (None, None) => self.radiotext.clone(),
         }
+    }
+
+    /// Station name to display: the Long PS when broadcast, else the 8-char PS.
+    pub fn name(&self) -> Option<&str> {
+        self.long_ps.as_deref().or(self.program_service.as_deref())
+    }
+
+    /// Program-type label: the station's own PTYN when broadcast, else the standard PTY name.
+    pub fn type_label(&self) -> Option<&str> {
+        self.ptyn.as_deref().or_else(|| self.pty_name())
     }
 
     /// Program-type name, if known.
@@ -88,6 +107,11 @@ impl StationTable {
                     .is_some_and(|a| set_changed(&mut s.artist, a.clone()));
                 t || a
             }
+            Event::Rds(RdsEvent::LongProgramService(name)) => {
+                set_changed(&mut s.long_ps, name.clone())
+            }
+            Event::Rds(RdsEvent::ProgramTypeName(name)) => set_changed(&mut s.ptyn, name.clone()),
+            Event::Rds(RdsEvent::ClockTime(ct)) => set_changed(&mut s.clock, ct.clone()),
         }
     }
 

@@ -54,6 +54,69 @@ impl PsBuffer {
     }
 }
 
+/// A name assembled from fixed-position segments: Long PS (32 bytes, UTF-8) and PTYN (8 bytes,
+/// basic G0). Like the others it fills positions across groups, but a 0x0D terminates a short
+/// name and completion needs the bytes received contiguously from the start.
+pub struct SegmentText {
+    chars: Vec<u8>,
+    seen: Vec<bool>,
+    utf8: bool,
+    ab: Option<u8>,
+    last: Option<String>,
+}
+
+impl SegmentText {
+    pub fn new(len: usize, utf8: bool) -> Self {
+        Self {
+            chars: vec![b' '; len],
+            seen: vec![false; len],
+            utf8,
+            ab: None,
+            last: None,
+        }
+    }
+
+    /// Clear on an A/B-flag change (PTYN). Fields without a flag (Long PS) never call this.
+    pub fn set_flag(&mut self, ab: u8) {
+        if self.ab != Some(ab) {
+            self.ab = Some(ab);
+            self.chars.fill(b' ');
+            self.seen.fill(false);
+        }
+    }
+
+    pub fn set(&mut self, idx: usize, byte: u8) {
+        if let Some(slot) = self.chars.get_mut(idx) {
+            *slot = byte;
+            self.seen[idx] = true;
+        }
+    }
+
+    /// The finished name once received contiguously up to its 0x0D terminator (or full length),
+    /// returned only when it changes.
+    pub fn value(&mut self) -> Option<String> {
+        let seq = self.seen.iter().take_while(|&&s| s).count();
+        let term = self.chars[..seq].iter().position(|&b| b == 0x0D);
+        let expected = term.map_or(self.chars.len(), |t| t + 1);
+        if seq < expected {
+            return None;
+        }
+        let end = term.unwrap_or(self.chars.len());
+        let text = if self.utf8 {
+            String::from_utf8_lossy(&self.chars[..end]).into_owned()
+        } else {
+            self.chars[..end].iter().map(|&b| rds_char(b)).collect()
+        };
+        let text = text.trim_end().to_string();
+        if text.is_empty() || self.last.as_deref() == Some(text.as_str()) {
+            None
+        } else {
+            self.last = Some(text.clone());
+            Some(text)
+        }
+    }
+}
+
 /// RadioText, up to 64 characters, filled by segment and reset when the text A/B flag toggles.
 pub struct RtBuffer {
     chars: [u8; 64],

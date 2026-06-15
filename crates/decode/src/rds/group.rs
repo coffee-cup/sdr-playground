@@ -3,7 +3,7 @@
 //! the Program Service name (group 0), and RadioText (group 2).
 
 use crate::rds::sync::{Block, C_PRIME, D};
-use crate::rds::text::{PsBuffer, RtBuffer};
+use crate::rds::text::{PsBuffer, RtBuffer, SegmentText};
 use crate::rds::RdsEvent;
 use crate::Event;
 
@@ -23,6 +23,10 @@ pub struct Groups {
     rtplus_toggle: Option<u8>,
     rtplus_title: Option<String>,
     rtplus_artist: Option<String>,
+    /// Long PS (15A, UTF-8, 32 bytes), PTYN (10A, 8 bytes), and the last clock-time emitted.
+    long_ps: SegmentText,
+    ptyn: SegmentText,
+    last_ct: Option<String>,
 }
 
 impl Groups {
@@ -38,6 +42,9 @@ impl Groups {
             rtplus_toggle: None,
             rtplus_title: None,
             rtplus_artist: None,
+            long_ps: SegmentText::new(32, true),
+            ptyn: SegmentText::new(8, false),
+            last_ct: None,
         }
     }
 
@@ -92,10 +99,91 @@ impl Groups {
             self.parse_rtplus(b, out);
         }
 
-        match group_type {
-            0 => self.parse_ps(b, out),
-            2 => self.parse_rt(b, version_b, out),
+        match (group_type, version_b) {
+            (0, _) => self.parse_ps(b, out),
+            (2, _) => self.parse_rt(b, version_b, out),
+            (4, false) => self.parse_ct(b, out),
+            (10, false) => self.parse_ptyn(b, out),
+            (15, false) => self.parse_long_ps(b, out),
             _ => {}
+        }
+    }
+
+    /// Group 15A: Long PS name (RDS2). A 3-bit segment in block B; four UTF-8 bytes per group,
+    /// two in block C and two in block D, each half written independently.
+    fn parse_long_ps(&mut self, b: u16, out: &mut Vec<Event>) {
+        let base = (b & 0x7) as usize * 4;
+        if let Some(c) = self.blocks[2] {
+            self.long_ps.set(base, (c >> 8) as u8);
+            self.long_ps.set(base + 1, (c & 0xFF) as u8);
+        }
+        if let Some(d) = self.blocks[3] {
+            self.long_ps.set(base + 2, (d >> 8) as u8);
+            self.long_ps.set(base + 3, (d & 0xFF) as u8);
+        }
+        if let Some(name) = self.long_ps.value() {
+            out.push(Event::Rds(RdsEvent::LongProgramService(name)));
+        }
+    }
+
+    /// Group 10A: Program Type Name, eight characters across two 1-bit-addressed segments, reset
+    /// on the block-B A/B flag. Needs both C and D.
+    fn parse_ptyn(&mut self, b: u16, out: &mut Vec<Event>) {
+        self.ptyn.set_flag(((b >> 4) & 1) as u8);
+        let (Some(c), Some(d)) = (self.blocks[2], self.blocks[3]) else {
+            return;
+        };
+        let base = (b & 0x1) as usize * 4;
+        self.ptyn.set(base, (c >> 8) as u8);
+        self.ptyn.set(base + 1, (c & 0xFF) as u8);
+        self.ptyn.set(base + 2, (d >> 8) as u8);
+        self.ptyn.set(base + 3, (d & 0xFF) as u8);
+        if let Some(name) = self.ptyn.value() {
+            out.push(Event::Rds(RdsEvent::ProgramTypeName(name)));
+        }
+    }
+
+    /// Group 4A: clock-time and date. The Modified Julian Day spans block B's low bit and block C;
+    /// the UTC time and a local offset (in half-hours) sit in C and D. Emitted as ISO-8601 with
+    /// the offset (the MJD->Gregorian conversion is EN 50067 Annex G).
+    fn parse_ct(&mut self, b: u16, out: &mut Vec<Event>) {
+        let (Some(c), Some(d)) = (self.blocks[2], self.blocks[3]) else {
+            return;
+        };
+        let mjd = (((u32::from(b) << 16) | u32::from(c)) >> 1) & 0x1_FFFF;
+        if mjd < 15079 {
+            return;
+        }
+        let hour = (((u32::from(c) << 16) | u32::from(d)) >> 12) & 0x1F;
+        let minute = (d >> 6) & 0x3F;
+        let off_half = (d & 0x1F) as i64;
+        if hour > 23 || minute > 59 || off_half > 28 {
+            return;
+        }
+
+        let mjdf = mjd as f64;
+        let y = ((mjdf - 15078.2) / 365.25) as i64;
+        let m = ((mjdf - 14956.1 - (y as f64 * 365.25).trunc()) / 30.6001) as i64;
+        let day =
+            (mjdf - 14956.0 - (y as f64 * 365.25).trunc() - (m as f64 * 30.6001).trunc()) as i64;
+        let (mut year, mut month) = (y, m);
+        if month == 14 || month == 15 {
+            year += 1;
+            month -= 12;
+        }
+        year += 1900;
+        month -= 1;
+
+        let offset = if off_half == 0 {
+            "Z".to_string()
+        } else {
+            let sign = if (d >> 5) & 1 == 1 { '-' } else { '+' };
+            format!("{sign}{:02}:{:02}", off_half / 2, (off_half % 2) * 30)
+        };
+        let ct = format!("{year:04}-{month:02}-{day:02}T{hour:02}:{minute:02}:00{offset}");
+        if self.last_ct.as_deref() != Some(ct.as_str()) {
+            self.last_ct = Some(ct.clone());
+            out.push(Event::Rds(RdsEvent::ClockTime(ct)));
         }
     }
 
@@ -271,7 +359,7 @@ mod tests {
                 Event::Rds(RdsEvent::ProgramService(s)) => got_ps = Some(s.clone()),
                 Event::Rds(RdsEvent::RadioText(s)) => got_rt = Some(s.clone()),
                 Event::Rds(RdsEvent::ProgramType(p)) => got_pty = Some(*p),
-                Event::Rds(RdsEvent::RadioTextPlus { .. }) => {}
+                _ => {}
             }
         }
 
@@ -350,5 +438,89 @@ mod tests {
         }
         assert_eq!(title.as_deref(), Some("MANIC MONDAY"));
         assert_eq!(artist.as_deref(), Some("THE BANGLES"));
+    }
+
+    fn group_abcd(bits: &mut Vec<u8>, pi: u16, b: u16, c: u16, d: u16) {
+        push_block(bits, make_block(pi, A));
+        push_block(bits, make_block(b, OFF_B));
+        push_block(bits, make_block(c, C));
+        push_block(bits, make_block(d, OFF_D));
+    }
+
+    /// Decode a stream of identical groups and return all events (after sync acquires).
+    fn decode_groups(make: impl Fn(&mut Vec<u8>), reps: usize) -> Vec<Event> {
+        let mut bits = Vec::new();
+        for _ in 0..reps {
+            make(&mut bits);
+        }
+        let mut sync = BlockSync::new();
+        let mut groups = Groups::new();
+        let mut events = Vec::new();
+        for &bit in &bits {
+            if let Some(block) = sync.push(bit) {
+                groups.push_block(block, &mut events);
+            }
+        }
+        events
+    }
+
+    #[test]
+    fn recovers_long_ps_15a() {
+        let pi = 0x4D54;
+        let name = b"The Beat - Montreal Top 40 Hits!"; // 32 chars, no terminator
+        let events = decode_groups(
+            |bits| {
+                for seg in 0..8u16 {
+                    let i = seg as usize * 4;
+                    let (c, d) = (
+                        ((name[i] as u16) << 8) | name[i + 1] as u16,
+                        ((name[i + 2] as u16) << 8) | name[i + 3] as u16,
+                    );
+                    group_abcd(bits, pi, (15 << 12) | (5 << 5) | seg, c, d);
+                }
+            },
+            6,
+        );
+        let long_ps = events.iter().find_map(|e| match e {
+            Event::Rds(RdsEvent::LongProgramService(s)) => Some(s.clone()),
+            _ => None,
+        });
+        assert_eq!(long_ps.as_deref(), Some("The Beat - Montreal Top 40 Hits!"));
+    }
+
+    #[test]
+    fn recovers_ptyn_10a() {
+        let pi = 0x4D54;
+        let name = b"Top Hits"; // 8 chars across two segments
+        let events = decode_groups(
+            |bits| {
+                for seg in 0..2u16 {
+                    let i = seg as usize * 4;
+                    let (c, d) = (
+                        ((name[i] as u16) << 8) | name[i + 1] as u16,
+                        ((name[i + 2] as u16) << 8) | name[i + 3] as u16,
+                    );
+                    group_abcd(bits, pi, (10 << 12) | (5 << 5) | seg, c, d);
+                }
+            },
+            8,
+        );
+        let ptyn = events.iter().find_map(|e| match e {
+            Event::Rds(RdsEvent::ProgramTypeName(s)) => Some(s.clone()),
+            _ => None,
+        });
+        assert_eq!(ptyn.as_deref(), Some("Top Hits"));
+    }
+
+    #[test]
+    fn recovers_clock_time_4a() {
+        // MJD 58849 = 2020-01-01, 12:34 UTC, zero offset. Block words built to match the layout.
+        let pi = 0x4D54;
+        let events = decode_groups(|bits| group_abcd(bits, pi, 0x40A1, 0xCBC2, 0xC880), 6);
+        let ct = events.iter().find_map(|e| match e {
+            Event::Rds(RdsEvent::ClockTime(s)) => Some(s.clone()),
+            _ => None,
+        });
+        assert_eq!(ct.as_deref(), Some("2020-01-01T12:34:00Z"));
     }
 }

@@ -41,6 +41,7 @@ fn decodes_recorded_thebeat() {
                     title = t.or(title);
                     artist = a.or(artist);
                 }
+                _ => {}
             }
         }
     }
