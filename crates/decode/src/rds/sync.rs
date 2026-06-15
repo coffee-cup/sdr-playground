@@ -1,4 +1,4 @@
-//! Block synchronization and error detection for the RDS data link.
+//! Block synchronization, error detection, and single-burst correction for the RDS data link.
 //!
 //! The bit stream is a continuous repetition of 104-bit groups, each four 26-bit blocks. A
 //! block is 16 information bits plus a 10-bit checkword formed from a shortened cyclic code
@@ -6,6 +6,11 @@
 //! 26-bit window and matching it against the five known offset syndromes both detects block
 //! boundaries and identifies which block (A, B, C, C', D) we are looking at. Algorithm and
 //! constants follow the IEC 62106 standard (as implemented in GNU Radio's gr-rds).
+//!
+//! While tracking, a block that fails its expected syndrome is run through single-burst
+//! correction: the (26,16) code can recover a short error burst (we attempt 1- and 2-bit
+//! bursts, the same bounded scheme redsea uses), which lifts decode yield on weak signals
+//! instead of dropping the block. Acquisition still requires clean matches.
 
 /// Offset indices A, B, C, D, C'. C' (used by version-B groups in block 3) shares block
 /// position 2 with C.
@@ -57,6 +62,27 @@ pub fn calc_syndrome(message: u32, mlen: u32) -> u16 {
     (reg & 0x3FF) as u16
 }
 
+/// Try to repair a 26-bit block whose syndrome does not match `target` (its expected offset's
+/// syndrome) by assuming a short error burst. The code is linear, so a burst `e` explains the
+/// mismatch when `calc_syndrome(e) == calc_syndrome(reg) ^ target`; returns `reg ^ e` for the
+/// first 1- or 2-adjacent-bit burst that fits. These bursts have distinct nonzero syndromes
+/// (the code's burst-correcting capability), so the match is unambiguous.
+fn correct_burst(reg: u32, target: u16) -> Option<u32> {
+    let want = calc_syndrome(reg, BLOCK_BITS) ^ target;
+    for burst in [0b1u32, 0b11u32] {
+        for shift in 0..BLOCK_BITS {
+            let e = burst << shift;
+            if e >> BLOCK_BITS != 0 {
+                break;
+            }
+            if calc_syndrome(e, BLOCK_BITS) == want {
+                return Some(reg ^ e);
+            }
+        }
+    }
+    None
+}
+
 /// Build a transmittable 26-bit block from 16 info bits and an offset index. Inverse of the
 /// syndrome check, used to synthesize RDS for tests.
 #[cfg(test)]
@@ -72,6 +98,8 @@ pub struct BlockSync {
     total_bits: u64,
     synced: bool,
     bad: u32,
+    /// Count of blocks recovered by burst-error correction (diagnostics / benchmarks).
+    corrected: u64,
     // Acquisition: remember the last syndrome match to confirm a second one a whole number of
     // blocks away and in a consistent position.
     last_match_bit: Option<u64>,
@@ -90,15 +118,9 @@ impl BlockSync {
         self.synced
     }
 
-    /// The offset index expected at block position `pos`, given the previously seen offset's
-    /// match (C and C' both live at position 2).
-    fn offset_for_pos(pos: usize) -> usize {
-        match pos {
-            0 => A,
-            1 => B,
-            2 => C,
-            _ => D,
-        }
+    /// Total blocks repaired by burst-error correction since construction.
+    pub fn corrections(&self) -> u64 {
+        self.corrected
     }
 
     /// Push one received bit; return a completed block when one is delimited.
@@ -113,22 +135,44 @@ impl BlockSync {
             }
             self.block_bit = 0;
 
-            let synd = calc_syndrome(self.reg, BLOCK_BITS);
             let expected = self.expected_pos;
-            // At position 2 either C or C' is valid; elsewhere a single offset.
-            let ok = if expected == C {
-                synd == SYNDROME[C] || synd == SYNDROME[C_PRIME]
-            } else {
-                synd == SYNDROME[Self::offset_for_pos(expected)]
+            self.expected_pos = (expected + 1) % 4;
+
+            let synd = calc_syndrome(self.reg, BLOCK_BITS);
+            // Offsets valid at this position (position 2 accepts either C or C').
+            let candidates: &[usize] = match expected {
+                0 => &[A],
+                1 => &[B],
+                2 => &[C, C_PRIME],
+                _ => &[D],
             };
-            let offset = if expected == C && synd == SYNDROME[C_PRIME] {
-                C_PRIME
+
+            let mut offset = candidates[0];
+            let mut info = (self.reg >> 10) as u16;
+            let mut ok = false;
+            let mut corrected = false;
+
+            if let Some(&clean) = candidates.iter().find(|&&o| synd == SYNDROME[o]) {
+                offset = clean;
+                ok = true;
             } else {
-                Self::offset_for_pos(expected)
-            };
+                // Failed its checkword: try to recover a short error burst before giving up.
+                for &o in candidates {
+                    if let Some(fixed) = correct_burst(self.reg, SYNDROME[o]) {
+                        offset = o;
+                        info = (fixed >> 10) as u16;
+                        ok = true;
+                        corrected = true;
+                        break;
+                    }
+                }
+            }
 
             if ok {
                 self.bad = 0;
+                if corrected {
+                    self.corrected = self.corrected.saturating_add(1);
+                }
             } else {
                 self.bad += 1;
                 if self.bad >= MAX_BAD_BLOCKS {
@@ -136,12 +180,7 @@ impl BlockSync {
                     self.last_match_bit = None;
                 }
             }
-            self.expected_pos = (self.expected_pos + 1) % 4;
-            return Some(Block {
-                info: (self.reg >> 10) as u16,
-                offset,
-                ok,
-            });
+            return Some(Block { info, offset, ok });
         }
 
         // Acquisition: look for a syndrome match, then confirm a second one a consistent
@@ -205,6 +244,95 @@ mod tests {
         let blk = make_block(0x1234, A);
         let corrupted = blk ^ (1 << 5);
         assert_ne!(calc_syndrome(corrupted, BLOCK_BITS), SYNDROME[A]);
+    }
+
+    #[test]
+    fn burst_syndromes_are_distinct() {
+        // The 1- and 2-bit bursts we correct must map to distinct nonzero syndromes, otherwise
+        // correction would be ambiguous. This is the code's burst-correcting property.
+        use std::collections::HashMap;
+        let mut seen: HashMap<u16, u32> = HashMap::new();
+        for burst in [0b1u32, 0b11u32] {
+            for shift in 0..BLOCK_BITS {
+                let e = burst << shift;
+                if e >> BLOCK_BITS != 0 {
+                    break;
+                }
+                let s = calc_syndrome(e, BLOCK_BITS);
+                assert_ne!(s, 0, "burst {e:#x} has a zero syndrome");
+                assert!(seen.insert(s, e).is_none(), "syndrome collision at {e:#x}");
+            }
+        }
+    }
+
+    #[test]
+    fn corrects_one_and_two_bit_bursts() {
+        // Every single-bit flip and every 2-adjacent-bit burst recovers the original block.
+        let blk = make_block(0x1234, A);
+        for bit in 0..BLOCK_BITS {
+            let fixed = correct_burst(blk ^ (1 << bit), SYNDROME[A])
+                .unwrap_or_else(|| panic!("1-bit error at {bit} not corrected"));
+            assert_eq!(
+                (fixed >> 10) as u16,
+                0x1234,
+                "wrong info after 1-bit at {bit}"
+            );
+        }
+        for bit in 0..BLOCK_BITS - 1 {
+            let fixed = correct_burst(blk ^ (0b11 << bit), SYNDROME[A])
+                .unwrap_or_else(|| panic!("2-bit burst at {bit} not corrected"));
+            assert_eq!(
+                (fixed >> 10) as u16,
+                0x1234,
+                "wrong info after 2-bit at {bit}"
+            );
+        }
+    }
+
+    #[test]
+    fn tracking_recovers_corrupted_blocks() {
+        // Acquire on clean groups, then inject a single-bit error into the info field of every
+        // block and confirm the decoder corrects them (right info, sync held) instead of dropping.
+        let push_block = |bits: &mut Vec<u8>, word: u32| {
+            for i in (0..26).rev() {
+                bits.push(((word >> i) & 1) as u8);
+            }
+        };
+        let group = [
+            make_block(0x4D54, A),
+            make_block(0x0123, B),
+            make_block(0x4567, C),
+            make_block(0x89AB, D),
+        ];
+        let mut bits = Vec::new();
+        for _ in 0..10 {
+            for w in group {
+                push_block(&mut bits, w);
+            }
+        }
+        for _ in 0..10 {
+            for w in group {
+                push_block(&mut bits, w ^ (1 << 15)); // flip one info-field bit
+            }
+        }
+
+        let mut sync = BlockSync::new();
+        let mut blocks = Vec::new();
+        for &b in &bits {
+            if let Some(blk) = sync.push(b) {
+                blocks.push(blk);
+            }
+        }
+
+        assert!(sync.synced(), "sync should hold through correctable errors");
+        assert!(sync.corrections() > 0, "should have corrected blocks");
+        let tail = &blocks[blocks.len() - 4..];
+        assert!(tail.iter().all(|b| b.ok), "corrected blocks should be ok");
+        assert_eq!(
+            tail.iter().map(|b| b.info).collect::<Vec<_>>(),
+            vec![0x4D54, 0x0123, 0x4567, 0x89AB],
+            "info recovered after correction"
+        );
     }
 
     /// Feed a stream of groups (each four blocks A,B,C,D) and confirm the sync recovers every

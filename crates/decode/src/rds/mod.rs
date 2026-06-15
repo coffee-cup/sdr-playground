@@ -44,6 +44,11 @@ impl RdsDecoder {
     pub fn synced(&self) -> bool {
         self.sync.synced()
     }
+
+    /// Total RDS blocks recovered by burst-error correction (for diagnostics and benchmarks).
+    pub fn corrections(&self) -> u64 {
+        self.sync.corrections()
+    }
 }
 
 impl Decoder for RdsDecoder {

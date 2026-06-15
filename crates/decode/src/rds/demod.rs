@@ -535,9 +535,10 @@ mod tests {
         let elapsed = start.elapsed().as_secs_f32();
         let sig = iq.len() as f32 / fs as f32;
         println!(
-            "CHANNEL_THROUGHPUT: {sig:.2}s signal in {elapsed:.3}s => {:.1}x realtime (~{:.0} stations/core)",
+            "CHANNEL_THROUGHPUT: {sig:.2}s signal in {elapsed:.3}s => {:.1}x realtime (~{:.0} stations/core), {} block corrections",
             sig / elapsed,
-            sig / elapsed
+            sig / elapsed,
+            dec.corrections(),
         );
     }
 }
