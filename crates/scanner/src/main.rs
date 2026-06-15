@@ -120,6 +120,7 @@ fn probe(args: ProbeArgs) -> Result<(), String> {
     let stop = install_ctrlc();
     let deadline = Instant::now() + Duration::from_secs_f64(args.secs);
     let (mut pi, mut pty, mut ps, mut rt) = (None, None, None, None);
+    let (mut title, mut artist): (Option<String>, Option<String>) = (None, None);
     while Instant::now() < deadline && !stop.load(Ordering::SeqCst) {
         for ce in engine.drain_events() {
             match ce.event {
@@ -132,6 +133,14 @@ fn probe(args: ProbeArgs) -> Result<(), String> {
                 Event::Rds(RdsEvent::RadioText(s)) => {
                     println!("  RT: {s:?}");
                     rt = Some(s);
+                }
+                Event::Rds(RdsEvent::RadioTextPlus {
+                    title: t,
+                    artist: a,
+                }) => {
+                    println!("  RT+: artist={a:?} title={t:?}");
+                    title = t.or(title);
+                    artist = a.or(artist);
                 }
             }
         }
@@ -147,6 +156,8 @@ fn probe(args: ProbeArgs) -> Result<(), String> {
     println!("PTY       {:?}", pty.map(sdr_engine::pty_name));
     println!("PS        {ps:?}");
     println!("RadioText {rt:?}");
+    println!("Artist    {artist:?}");
+    println!("Title     {title:?}");
     if pi.is_none() {
         return Err("no RDS decoded (signal too weak, no RDS, or decoder needs work)".into());
     }
@@ -206,7 +217,7 @@ fn scan(args: ScanArgs) -> Result<(), String> {
             "{:7.1} MHz  {:8}  {}",
             s.freq as f64 / 1e6,
             s.program_service.as_deref().unwrap_or(""),
-            s.radiotext.as_deref().unwrap_or(""),
+            s.now_playing().unwrap_or_default(),
         );
     }
     let with_rt = with_ps.iter().filter(|s| s.radiotext.is_some()).count();

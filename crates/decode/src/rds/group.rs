@@ -17,6 +17,12 @@ pub struct Groups {
     rt: RtBuffer,
     last_pi: Option<u16>,
     last_pty: Option<u8>,
+    /// RT+ state: the 5-bit application group-type code that carries the tags (named by a 3A
+    /// registration), the last item toggle, and the last title/artist emitted (for dedup).
+    rtplus_code: Option<u8>,
+    rtplus_toggle: Option<u8>,
+    rtplus_title: Option<String>,
+    rtplus_artist: Option<String>,
 }
 
 impl Groups {
@@ -28,6 +34,10 @@ impl Groups {
             rt: RtBuffer::new(),
             last_pi: None,
             last_pty: None,
+            rtplus_code: None,
+            rtplus_toggle: None,
+            rtplus_title: None,
+            rtplus_artist: None,
         }
     }
 
@@ -72,10 +82,78 @@ impl Groups {
             out.push(Event::Rds(RdsEvent::ProgramType(pty)));
         }
 
+        // RT+ ODA registration (group 3A): block D is the AID, block B's low 5 bits name the
+        // group type that will carry the RT+ tags.
+        if group_type == 3 && !version_b && self.blocks[3] == Some(0x4BD7) {
+            self.rtplus_code = Some((b & 0x1F) as u8);
+        }
+        // If this group is the registered RT+ carrier, pull title/artist out of the RadioText.
+        if self.rtplus_code == Some(((group_type as u8) << 1) | u8::from(version_b)) {
+            self.parse_rtplus(b, out);
+        }
+
         match group_type {
             0 => self.parse_ps(b, out),
             2 => self.parse_rt(b, version_b, out),
             _ => {}
+        }
+    }
+
+    /// Parse an RT+ data group: up to two tags, each a (content type, start, length) triple that
+    /// slices the current RadioText. Content type 1 is the item title, 4 the artist. The fields
+    /// straddle blocks; layout transcribed from redsea (tag 2's length is only 5 bits).
+    fn parse_rtplus(&mut self, b: u16, out: &mut Vec<Event>) {
+        let toggle = ((b >> 4) & 1) as u8;
+        // A toggle flip signals a new item; forget the old tags so the new ones re-emit.
+        if self.rtplus_toggle != Some(toggle) {
+            self.rtplus_toggle = Some(toggle);
+            self.rtplus_title = None;
+            self.rtplus_artist = None;
+        }
+
+        let Some(c) = self.blocks[2] else { return };
+        let mut tags = [(0u32, 0usize, 0usize); 2];
+        tags[0] = (
+            ((u32::from(b) << 16 | u32::from(c)) >> 13) & 0x3F,
+            ((c >> 7) & 0x3F) as usize,
+            ((c >> 1) & 0x3F) as usize + 1,
+        );
+        let n = if let Some(d) = self.blocks[3] {
+            tags[1] = (
+                ((u32::from(c) << 16 | u32::from(d)) >> 11) & 0x3F,
+                ((d >> 5) & 0x3F) as usize,
+                (d & 0x1F) as usize + 1,
+            );
+            2
+        } else {
+            1
+        };
+
+        let (mut title, mut artist) = (None, None);
+        for &(ct, start, len) in &tags[..n] {
+            let Some(text) = (ct != 0).then(|| self.rt.substring(start, len)).flatten() else {
+                continue;
+            };
+            match ct {
+                1 => title = Some(text),
+                4 => artist = Some(text),
+                _ => {}
+            }
+        }
+
+        let changed = (title.is_some() && title != self.rtplus_title)
+            || (artist.is_some() && artist != self.rtplus_artist);
+        if title.is_some() {
+            self.rtplus_title = title;
+        }
+        if artist.is_some() {
+            self.rtplus_artist = artist;
+        }
+        if changed {
+            out.push(Event::Rds(RdsEvent::RadioTextPlus {
+                title: self.rtplus_title.clone(),
+                artist: self.rtplus_artist.clone(),
+            }));
         }
     }
 
@@ -193,6 +271,7 @@ mod tests {
                 Event::Rds(RdsEvent::ProgramService(s)) => got_ps = Some(s.clone()),
                 Event::Rds(RdsEvent::RadioText(s)) => got_rt = Some(s.clone()),
                 Event::Rds(RdsEvent::ProgramType(p)) => got_pty = Some(*p),
+                Event::Rds(RdsEvent::RadioTextPlus { .. }) => {}
             }
         }
 
@@ -200,5 +279,76 @@ mod tests {
         assert_eq!(got_pty, Some(5));
         assert_eq!(got_ps.as_deref(), Some("KEXP-FM"));
         assert_eq!(got_rt.as_deref(), Some("Now Playing: Radiohead - Creep"));
+    }
+
+    /// A group 3A registering RT+ (AID 0x4BD7) on group type 11A (application code 22).
+    fn group_3a_rtplus(bits: &mut Vec<u8>, pi: u16) {
+        let b = (3u16 << 12) | (5 << 5) | 22;
+        push_block(bits, make_block(pi, A));
+        push_block(bits, make_block(b, OFF_B));
+        push_block(bits, make_block(0x0000, C));
+        push_block(bits, make_block(0x4BD7, OFF_D));
+    }
+
+    /// An 11A group carrying two RT+ tags in blocks C and D (toggle 0, running 1).
+    fn group_11a_rtplus(bits: &mut Vec<u8>, pi: u16, c: u16, d: u16) {
+        let b = (11u16 << 12) | (5 << 5) | 0b0_1000;
+        push_block(bits, make_block(pi, A));
+        push_block(bits, make_block(b, OFF_B));
+        push_block(bits, make_block(c, C));
+        push_block(bits, make_block(d, OFF_D));
+    }
+
+    #[test]
+    fn recovers_rtplus_title_and_artist() {
+        let pi = 0x4D54;
+        let rt = b"MANIC MONDAY by THE BANGLES     "; // 32 chars
+                                                      // tag 1: title (ct 1) start 0, length field 11 -> 12 chars "MANIC MONDAY".
+                                                      // tag 2: artist (ct 4) start 16, length field 10 -> 11 chars "THE BANGLES".
+        let (c, d) = (0x2016u16, 0x220Au16);
+
+        let mut bits = Vec::new();
+        for _ in 0..8 {
+            group_3a_rtplus(&mut bits, pi);
+            for seg in 0..8u16 {
+                let i = seg as usize * 4;
+                group_2a(
+                    &mut bits,
+                    pi,
+                    5,
+                    0,
+                    seg,
+                    &[rt[i], rt[i + 1], rt[i + 2], rt[i + 3]],
+                );
+            }
+            group_11a_rtplus(&mut bits, pi, c, d);
+        }
+
+        let mut sync = BlockSync::new();
+        let mut groups = Groups::new();
+        let mut events = Vec::new();
+        for &bit in &bits {
+            if let Some(block) = sync.push(bit) {
+                groups.push_block(block, &mut events);
+            }
+        }
+
+        let (mut title, mut artist) = (None, None);
+        for e in &events {
+            if let Event::Rds(RdsEvent::RadioTextPlus {
+                title: t,
+                artist: a,
+            }) = e
+            {
+                if t.is_some() {
+                    title = t.clone();
+                }
+                if a.is_some() {
+                    artist = a.clone();
+                }
+            }
+        }
+        assert_eq!(title.as_deref(), Some("MANIC MONDAY"));
+        assert_eq!(artist.as_deref(), Some("THE BANGLES"));
     }
 }

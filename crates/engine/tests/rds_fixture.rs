@@ -22,6 +22,7 @@ fn decodes_recorded_thebeat() {
     let mut buf = vec![Iq::default(); 1 << 16];
 
     let (mut pi, mut pty, mut ps, mut rt) = (None, None, None, None);
+    let (mut title, mut artist): (Option<String>, Option<String>) = (None, None);
     loop {
         let n = src.read(&mut buf).expect("read fixture");
         if n == 0 {
@@ -33,11 +34,20 @@ fn decodes_recorded_thebeat() {
                 Event::Rds(RdsEvent::ProgramType(p)) => pty = Some(p),
                 Event::Rds(RdsEvent::ProgramService(s)) => ps = Some(s),
                 Event::Rds(RdsEvent::RadioText(s)) => rt = Some(s),
+                Event::Rds(RdsEvent::RadioTextPlus {
+                    title: t,
+                    artist: a,
+                }) => {
+                    title = t.or(title);
+                    artist = a.or(artist);
+                }
             }
         }
     }
 
-    println!("decoded PI={pi:04X?} PTY={pty:?} PS={ps:?} RT={rt:?}");
+    println!(
+        "decoded PI={pi:04X?} PTY={pty:?} PS={ps:?} RT={rt:?} artist={artist:?} title={title:?}"
+    );
     assert_eq!(pi, Some(0xCC24), "PI must match the redsea-confirmed value");
     assert_eq!(
         ps.as_deref().map(str::trim),
@@ -45,4 +55,7 @@ fn decodes_recorded_thebeat() {
         "PS mismatch (got {ps:?})"
     );
     assert!(rt.is_some(), "expected RadioText to decode");
+    // RT+ carves clean Title/Artist out of the RadioText (here even where the raw RT glitched).
+    assert_eq!(title.as_deref(), Some("MISS INDEPENDENT"), "RT+ title");
+    assert_eq!(artist.as_deref(), Some("KELLY CLARKSON"), "RT+ artist");
 }

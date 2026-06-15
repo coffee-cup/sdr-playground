@@ -73,7 +73,7 @@ fn draw(
             format!("{:.1}", s.freq as f64 / 1e6),
             s.program_service.clone().unwrap_or_default(),
             s.pty_name().unwrap_or("").to_string(),
-            s.radiotext.clone().unwrap_or_default(),
+            s.now_playing().unwrap_or_default(),
         ])
     });
     let widths = [

@@ -89,6 +89,31 @@ impl RtBuffer {
         }
     }
 
+    /// Extract the `start..start+len` slice an RT+ tag points at, but only if every referenced
+    /// position has actually been received (so a tag can't slice into not-yet-filled RadioText).
+    /// Trailing spaces are trimmed; a blank slice yields `None`.
+    pub fn substring(&self, start: usize, len: usize) -> Option<String> {
+        let end = start.checked_add(len)?;
+        if end > 64 {
+            return None;
+        }
+        let upto = if end == 64 {
+            u64::MAX
+        } else {
+            (1u64 << end) - 1
+        };
+        let want = upto & !((1u64 << start) - 1);
+        if self.seen & want != want {
+            return None;
+        }
+        let text: String = self.chars[start..end]
+            .iter()
+            .map(|&b| rds_char(b))
+            .collect();
+        let text = text.trim().to_string();
+        (!text.is_empty()).then_some(text)
+    }
+
     /// Place characters starting at `start`. Returns the current text when it changes. A 0x0D
     /// carriage return marks the end of the message and truncates it.
     pub fn apply(&mut self, start: usize, bytes: &[u8]) -> Option<String> {

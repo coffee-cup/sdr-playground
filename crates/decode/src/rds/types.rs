@@ -13,6 +13,12 @@ pub enum RdsEvent {
     ProgramType(u8),
     /// RadioText: free-form now-playing text, frequently "Artist - Title".
     RadioText(String),
+    /// RadioText Plus: structured now-playing tags carved out of the RadioText by an ODA
+    /// (AID 0x4BD7). Carries the current item title and/or artist when the station provides them.
+    RadioTextPlus {
+        title: Option<String>,
+        artist: Option<String>,
+    },
 }
 
 /// RBDS (North American) program-type names, indexed by the 5-bit PTY code. The European RDS

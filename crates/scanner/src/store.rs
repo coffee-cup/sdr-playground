@@ -20,6 +20,9 @@ pub struct Station {
     pub pty: Option<u8>,
     pub program_service: Option<String>,
     pub radiotext: Option<String>,
+    /// Structured now-playing from RT+ (when the station sends it), carved out of the RadioText.
+    pub title: Option<String>,
+    pub artist: Option<String>,
 }
 
 impl Station {
@@ -30,6 +33,18 @@ impl Station {
             pty: None,
             program_service: None,
             radiotext: None,
+            title: None,
+            artist: None,
+        }
+    }
+
+    /// Now-playing line: the RT+ "Artist - Title" when available, else the raw RadioText.
+    pub fn now_playing(&self) -> Option<String> {
+        match (&self.artist, &self.title) {
+            (Some(a), Some(t)) => Some(format!("{a} - {t}")),
+            (Some(a), None) => Some(a.clone()),
+            (None, Some(t)) => Some(t.clone()),
+            (None, None) => self.radiotext.clone(),
         }
     }
 
@@ -64,6 +79,15 @@ impl StationTable {
                 set_changed(&mut s.program_service, ps.clone())
             }
             Event::Rds(RdsEvent::RadioText(rt)) => set_changed(&mut s.radiotext, rt.clone()),
+            Event::Rds(RdsEvent::RadioTextPlus { title, artist }) => {
+                let t = title
+                    .as_ref()
+                    .is_some_and(|t| set_changed(&mut s.title, t.clone()));
+                let a = artist
+                    .as_ref()
+                    .is_some_and(|a| set_changed(&mut s.artist, a.clone()));
+                t || a
+            }
         }
     }
 
