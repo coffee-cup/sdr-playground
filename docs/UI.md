@@ -148,6 +148,14 @@ The data-flow side of the SQLite store (the event bus writing to it, tuning read
 
 ---
 
+## Scanner (terminal)
+
+The `scanner` crate is a separate, terminal-based front-end (not part of the GPUI frame above): a focused tool that sweeps the FM band and shows what every station is playing, decoded from RDS. It rides the same `engine` as the app, so it is a peer front-end rather than a fork of the pipeline.
+
+`sdr-scan scan` runs a `ratatui` table that fills in as the scanner sweeps: one row per station with RDS, showing frequency, the program-service name, the program type, and the current RadioText (which is where the now-playing "Artist - Title" lives). A status line shows the window being tuned. The band is covered as a sequence of device-bandwidth windows because one RTL-SDR sees only ~1-2 MHz at once; each window is dwelled on long enough for RDS to deliver the slow-arriving PS and RadioText before retuning. `sdr-scan probe --freq <MHz>` is the headless single-station path used to validate decoding against the live device.
+
+---
+
 ## Open questions
 
 - **Events as workspace vs. tab.** Whether the full Events history warrants its own workspace in addition to the bottom-pane live feed, or whether one of the two is redundant. Current lean: keep both, with the tab as the live feed and the workspace as the searchable archive.

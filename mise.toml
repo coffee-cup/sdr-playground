@@ -17,6 +17,16 @@ run = "cargo run -p sdr-app"
 description = "Run the headless CLI (pass args after --)"
 run = "cargo run -q -p sdr-cli --"
 
+# The band scanner. `scan` launches the TUI (for you to run, like `app`); `probe` decodes one
+# station headlessly. Forward args after `--`, e.g. `mise run probe -- --freq 92.5M`.
+[tasks.scan]
+description = "Scan the FM band for RDS song/artist data (TUI)"
+run = "cargo run -q -p sdr-scanner -- scan"
+
+[tasks.probe]
+description = "Decode RDS from one station headlessly (pass args after --)"
+run = "cargo run -q -p sdr-scanner -- probe"
+
 [tasks.test]
 description = "Run all tests"
 run = "cargo test --workspace"

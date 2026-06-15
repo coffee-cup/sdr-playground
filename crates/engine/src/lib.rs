@@ -8,11 +8,12 @@
 //! the stream, so the broadcast fan-out and DSP pool are deliberately deferred until the first
 //! Channel needs them (see ARCHITECTURE "Concurrency model").
 
+mod channel;
 mod frame;
 mod snapshot;
 
-use std::sync::mpsc::{self, Sender, TryRecvError};
-use std::sync::Arc;
+use std::sync::mpsc::{self, Receiver, Sender, TryRecvError};
+use std::sync::{Arc, Mutex};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
@@ -20,14 +21,31 @@ use arc_swap::ArcSwap;
 use sdr_device::rtlsdr::DEFAULT_READ_SAMPLES;
 use sdr_dsp::SpectrumAnalyzer;
 
+pub use channel::ChannelSpec;
 pub use frame::{SpectrumFrame, Tap, WaveformFrame};
 pub use snapshot::Snapshot;
+
+use channel::Channel;
 
 // Re-exported so front-ends that depend only on `engine` can construct sources and configure
 // the pipeline.
 pub use sdr_core::{Iq, Source};
+pub use sdr_decode::{pty_name, Decoder, Event, RdsEvent};
+pub use sdr_device::convert::iq_to_cu8;
 pub use sdr_device::{DeviceInfo, FileSource, Gain, RtlConfig, RtlSdrSource};
 pub use sdr_dsp::{SpectrumConfig, WindowKind};
+
+/// IQ ring-buffer capacity between the realtime reader and the decode worker (~0.2 s at
+/// 2.4 MS/s). On overflow the reader drops samples rather than block.
+const IQ_RING_CAP: usize = 1 << 19;
+
+/// A decoded event tagged with the channel that produced it. The offset is relative to the
+/// tuned center, so a front-end that knows the center maps it to an absolute frequency.
+#[derive(Debug, Clone)]
+pub struct ChannelEvent {
+    pub offset_hz: f64,
+    pub event: Event,
+}
 
 /// How often the reader thread publishes fresh taps (~30 Hz). Also the waterfall's row rate.
 const PUBLISH_INTERVAL: Duration = Duration::from_millis(33);
@@ -71,6 +89,13 @@ pub struct Engine {
     waveform: Tap<WaveformFrame>,
     ctrl: Sender<Ctrl>,
     handle: Option<JoinHandle<()>>,
+    /// Replace the active decode channels (sent to the decode worker). `Option` so `Drop` can
+    /// disconnect it before joining the worker, which is the worker's exit signal.
+    channels: Option<Sender<Vec<ChannelSpec>>>,
+    /// Decoded events from the worker, drained by the front-end. The `Mutex` keeps `Engine`
+    /// `Sync` (an `mpsc::Receiver` is not) so front-ends can hold it in an `Arc`.
+    events: Mutex<Receiver<ChannelEvent>>,
+    worker: Option<JoinHandle<()>>,
 }
 
 impl Engine {
@@ -86,6 +111,15 @@ impl Engine {
         let waveform = Arc::new(ArcSwap::from_pointee(WaveformFrame::initial(rate)));
         let (ctrl, rx) = mpsc::channel();
 
+        // Realtime reader -> decode worker handoff: a lock-free IQ ring and an event bus back.
+        let (iq_tx, iq_rx) = rtrb::RingBuffer::<Iq>::new(IQ_RING_CAP);
+        let (events_tx, events_rx) = mpsc::channel();
+        let (channels_tx, channels_rx) = mpsc::channel();
+        let worker = thread::Builder::new()
+            .name("sdr-decode".into())
+            .spawn(move || decode_loop(iq_rx, rate, channels_rx, events_tx))
+            .expect("spawn decode worker");
+
         let taps = Taps {
             snapshot: Arc::clone(&snapshot),
             spectrum: Arc::clone(&spectrum),
@@ -93,7 +127,7 @@ impl Engine {
         };
         let handle = thread::Builder::new()
             .name("sdr-reader".into())
-            .spawn(move || reader_loop(source, taps, config, rx))
+            .spawn(move || reader_loop(source, taps, config, rx, iq_tx))
             .expect("spawn reader thread");
 
         Engine {
@@ -102,6 +136,9 @@ impl Engine {
             waveform,
             ctrl,
             handle: Some(handle),
+            channels: Some(channels_tx),
+            events: Mutex::new(events_rx),
+            worker: Some(worker),
         }
     }
 
@@ -136,6 +173,19 @@ impl Engine {
         let _ = self.ctrl.send(Ctrl::SetFps(fps));
     }
 
+    /// Replace the set of decode channels. The worker rebuilds them and flushes stale IQ, so a
+    /// front-end retunes then calls this with the new window's channels.
+    pub fn set_channels(&self, specs: Vec<ChannelSpec>) {
+        if let Some(channels) = &self.channels {
+            let _ = channels.send(specs);
+        }
+    }
+
+    /// Drain all decoded events produced since the last call.
+    pub fn drain_events(&self) -> Vec<ChannelEvent> {
+        self.events.lock().unwrap().try_iter().collect()
+    }
+
     /// Stop the reader thread and wait for it to finish.
     pub fn stop(self) {
         drop(self);
@@ -147,6 +197,58 @@ impl Drop for Engine {
         let _ = self.ctrl.send(Ctrl::Stop);
         if let Some(handle) = self.handle.take() {
             let _ = handle.join();
+        }
+        // Disconnect the channel sender so the worker sees `Disconnected` and exits, then join it.
+        self.channels.take();
+        if let Some(worker) = self.worker.take() {
+            let _ = worker.join();
+        }
+    }
+}
+
+/// The decode worker: drains IQ from the realtime reader, runs each active channel, and forwards
+/// decoded events. Lives in the orchestration tier (a plain thread, off the realtime path).
+fn decode_loop(
+    mut iq_rx: rtrb::Consumer<Iq>,
+    input_rate: u32,
+    channels_rx: Receiver<Vec<ChannelSpec>>,
+    events_tx: Sender<ChannelEvent>,
+) {
+    let mut channels: Vec<Channel> = Vec::new();
+    let mut block: Vec<Iq> = Vec::new();
+    loop {
+        match channels_rx.try_recv() {
+            Ok(specs) => {
+                channels = specs
+                    .into_iter()
+                    .map(|s| Channel::new(s, input_rate))
+                    .collect();
+                // Discard IQ captured before the retune that accompanies a channel change.
+                while iq_rx.pop().is_ok() {}
+            }
+            Err(TryRecvError::Disconnected) => break,
+            Err(TryRecvError::Empty) => {}
+        }
+
+        let avail = iq_rx.slots();
+        if avail == 0 {
+            thread::sleep(Duration::from_millis(2));
+            continue;
+        }
+        if let Ok(chunk) = iq_rx.read_chunk(avail) {
+            let (a, b) = chunk.as_slices();
+            block.clear();
+            block.extend_from_slice(a);
+            block.extend_from_slice(b);
+            chunk.commit_all();
+        }
+        for ch in &mut channels {
+            let offset_hz = ch.offset_hz();
+            for event in ch.feed(&block) {
+                if events_tx.send(ChannelEvent { offset_hz, event }).is_err() {
+                    return;
+                }
+            }
         }
     }
 }
@@ -163,6 +265,7 @@ fn reader_loop(
     taps: Taps,
     config: EngineConfig,
     rx: mpsc::Receiver<Ctrl>,
+    mut iq_tx: rtrb::Producer<Iq>,
 ) {
     // The configured waveform length is the ceiling; the live value is re-clamped whenever the
     // FFT size changes (a block is never shorter than the slice the waveform tap exposes).
@@ -218,6 +321,14 @@ fn reader_loop(
                 break;
             }
         };
+
+        // Hand the raw IQ to the decode worker (best-effort: drop on ring overflow).
+        let want = n.min(iq_tx.slots());
+        if want > 0 {
+            if let Ok(chunk) = iq_tx.write_chunk_uninit(want) {
+                chunk.fill_from_iter(scratch[..want].iter().copied());
+            }
+        }
 
         total += n as u64;
         window_count += n as u64;
