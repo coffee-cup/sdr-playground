@@ -78,7 +78,7 @@ fn draw(
     });
     let widths = [
         Constraint::Length(8),
-        Constraint::Length(10),
+        Constraint::Length(12),
         Constraint::Length(16),
         Constraint::Min(20),
     ];
