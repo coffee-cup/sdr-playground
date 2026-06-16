@@ -25,6 +25,25 @@ pub fn cu8_to_iq(bytes: &[u8], out: &mut [Iq]) -> usize {
     n
 }
 
+/// Convert complex samples back into interleaved unsigned-8 IQ bytes, the inverse of
+/// [`cu8_to_iq`]. Used to record a live IQ stream to a replayable `cu8` file.
+///
+/// Writes `min(samples.len(), out.len() / 2)` samples (two bytes each) and returns the byte
+/// count. Values outside ±1.0 saturate to the 8-bit range rather than wrap.
+pub fn iq_to_cu8(samples: &[Iq], out: &mut [u8]) -> usize {
+    let n = samples.len().min(out.len() / 2);
+    for (pair, s) in out.chunks_exact_mut(2).zip(&samples[..n]) {
+        pair[0] = to_u8(s.re);
+        pair[1] = to_u8(s.im);
+    }
+    n * 2
+}
+
+/// Map a normalized sample back to the [0, 255] ADC range, saturating at the ends.
+fn to_u8(v: f32) -> u8 {
+    (v / SCALE + DC_OFFSET).round().clamp(0.0, 255.0) as u8
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -62,6 +81,29 @@ mod tests {
         cu8_to_iq(&[255, 0], &mut out);
         assert!(out[0].re > 0.5, "re = {}", out[0].re);
         assert!(out[0].im < -0.5, "im = {}", out[0].im);
+    }
+
+    #[test]
+    fn iq_to_cu8_round_trips_through_cu8_to_iq() {
+        // Original bytes survive a cu8 -> iq -> cu8 round trip (rounding is exact at integers).
+        let bytes = [0u8, 64, 127, 128, 200, 255];
+        let mut iq = [Iq::default(); 3];
+        cu8_to_iq(&bytes, &mut iq);
+        let mut back = [0u8; 6];
+        assert_eq!(iq_to_cu8(&iq, &mut back), 6);
+        assert_eq!(back, bytes);
+    }
+
+    #[test]
+    fn iq_to_cu8_saturates_out_of_range() {
+        let mut out = [0u8; 4];
+        assert_eq!(
+            iq_to_cu8(&[Iq::new(-2.0, 2.0), Iq::new(0.0, 0.0)], &mut out),
+            4
+        );
+        assert_eq!(out[0], 0); // re clamps to floor
+        assert_eq!(out[1], 255); // im clamps to ceil
+        assert_eq!(out[2], 128); // 0.0 -> midpoint (127.5 rounds to 128)
     }
 
     #[test]

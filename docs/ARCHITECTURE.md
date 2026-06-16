@@ -17,38 +17,35 @@ The **orchestration layer** (channel lifecycle, decoders, recording, event bus, 
 The boundary between the two layers is a set of lock-free ring buffers. The realtime core produces into them and never waits on the layer above. The orchestration layer consumes snapshots and never reaches into the hot loop. Data flows upward; control messages (tune, start a channel) flow downward through message queues rather than shared mutable state.
 
 ```
-        ┌─────────────────────────── realtime core (threads, no async) ──┐
-        │                                                                 │
- Source ─→ pre-trigger ring ─→ broadcast ─┬─→ Channel ─→ demod ─→ ┐       │
- (device                                  ├─→ Channel ─→ demod ─→ ┤       │
-  or file)                                └─→ Channel ─→ ...       │       │
-        │                                                      mixer ─→ audio out
-        │         └─→ wideband FFT ─→ spectrum / waterfall          │      │
-        └───────────────────────┬─────────────────────────────────┘      │
-                                 │ taps (lock-free snapshots)              │
-        ┌────────────────────────┴──────────── orchestration (tokio) ─────┘
-        │
-        ├─→ decoders (one task each; heavy compute → CPU pool) ─→ events
-        ├─→ event bus ─→ timeline / UI
-        ├─→ recording (snapshot ring → disk)
-        └─→ UI: GPUI render loop pulling tap snapshots
+        ┌──────────────── realtime core (threads, no async) ─────────────┐
+        │  reader thread:                                                 │
+ Source ─→ read ─┬─→ wideband FFT ─→ spectrum / waveform / snapshot taps  │
+ (device         │                                                        │
+  or file)       └─→ IQ ring (rtrb, lock-free) ──────────┐                │
+        └──────────────────────────────────────────────┬─┘               │
+                          taps (lock-free snapshots)    │ raw IQ          │
+        ┌──────────────────────────┴──────── orchestration (worker thread)┘
+        │  decode worker:  drain IQ ring ─→ Channel[i] (NCO → decimate
+        │                  → FM demod → Decoder) ─→ event bus (mpsc)
+        ├─→ UI: GPUI render loop pulling tap snapshots          (app)
+        └─→ station table ← drain_events                        (scanner)
 ```
 
 ---
 
 ## Signal pipeline
 
-All processing originates from a single stream of raw IQ from the `Source`. The stream is broadcast to N consumers: each `Channel` and the wideband FFT reads from its own ring buffer, so no consumer contends with another and a slow consumer cannot back-pressure the source. A dropped sample in a visualization is acceptable; blocking the device read is not.
+All processing originates from a single stream of raw IQ from the `Source`. The reader thread computes the wideband FFT inline and pushes the same IQ into a lock-free ring; the decode worker drains that ring and runs every active `Channel` over each block. A slow worker drops samples from the ring rather than back-pressuring the device: a dropped sample in a visualization or a marginal decode is acceptable; blocking the device read is not.
 
 A `Channel` is the unit of work:
 
 ```
-tune (freq shift to baseband) → low-pass + decimate → demodulate → [decoder tail]
+tune (NCO freq shift to baseband) → low-pass + decimate → FM demodulate → decoder
 ```
 
-Each stage is cheap and composable. Tuning is a complex multiply. Decimation discards unused bandwidth, which is the primary performance lever: DSP runs on a 200 kHz slice rather than the full 2.4 MS/s. Demodulation converts baseband to audio, or passes IQ through to a decoder. The decoder tail is optional and decoupled from the audio path (see Concurrency model).
+Each stage is cheap and composable. Tuning is a complex multiply by the station's offset from the window center, which also moves the station off the RTL-SDR DC spike (a one-pole DC blocker mops up the rest). Decimation discards unused bandwidth: the decoder runs on a ~240 kHz multiplex rather than the full capture rate. The decoder tail consumes the demodulated multiplex and emits events, decoupled from the realtime path.
 
-Demodulated audio from all active channels feeds a single mixer and then the audio device. One output, N channels.
+Scanning the whole FM band uses this: a single RTL-SDR sees ~1-2 MHz at once, so the scanner plans a set of windows covering 88–108 MHz, and for each window registers one channel per station in view, dwells adaptively (leaving a window once it stops yielding new RDS, so empty stretches of the band are abandoned in a couple of seconds instead of burning a fixed dwell), then retunes to the next window.
 
 ---
 
@@ -68,9 +65,9 @@ Concretely, a tap is a single-slot `Arc<ArcSwap<T>>`: the producer stores, a rea
 
 A `Source` produces raw IQ. Live hardware and recorded files implement the same trait, so the pipeline is identical whether samples come from the antenna or from disk. Running a saved signal as if live is not a separate mode; it is a file `Source` that paces its reads to the sample rate.
 
-Recording is the inverse operation. At the raw-IQ level, before fan-out, a pre-trigger ring buffer continuously overwrites with the last N seconds of input (configurable, default approximately 1 second). At 2.4 MS/s in `cf32` this is about 19 MB/s, so several seconds in RAM is inexpensive. A save operation snapshots the ring to disk, capturing signal that has already passed, which is the required behavior for transient signals.
+Recording is the inverse operation. Today `cli record` opens a `Source` and streams raw `cu8` to disk (the drop-free reader thread makes this lossless even at high rates). A pre-trigger ring (continuously overwriting the last N seconds, snapshotted on a trigger to capture transients) is the planned upgrade.
 
-Saved files serve as test fixtures. A signal is recorded once and committed; each decoder test replays it through the real pipeline and asserts on the resulting events. The DSP is not mocked, because the fixture is the exact input the hardware would have produced.
+Saved files serve as test fixtures. A signal is recorded once and committed; a test replays it through the real pipeline and asserts on the resulting events. The DSP is not mocked, because the fixture is the exact input the hardware would have produced.
 
 This makes the `Source` trait the most important boundary in the system. With it defined correctly, live operation, replay, waterfall scrubbing, and testing share a single code path.
 
@@ -80,18 +77,17 @@ This makes the `Source` trait the most important boundary in the system. With it
 
 **Realtime core (dedicated threads, no async):**
 
-- A reader thread loops on `source.read()` and writes into the pre-trigger ring and the broadcast. A device source blocks on USB; a file source paces to real time. (Today the reader also computes the wideband FFT inline and publishes the spectrum/waveform taps directly: the FFT is the stream's only consumer, so the broadcast fan-out and DSP pool below are deferred until the first Channel needs them — adding them now would be indirection with no second consumer to pay for it.) Control messages are applied between reads, so changes take effect without restarting the thread or reopening the device: retune (`Tune`), reconfigure the spectrum analyzer's FFT size/window (`SetSpectrum`), and change the publish/waterfall-row rate (`SetFps`).
-- A DSP pool processes active channels as work units. Multi-core parallelism occurs here: multiple channels, or multiple decoders' compute, run on separate cores, while a single channel runs as straight-line code with no internal threading overhead.
-- The audio callback pulls mixed samples from a ring and must always have data available. The rest of the core exists to keep that ring full.
+- The RTL-SDR `Source` runs its own reader thread that does nothing but `read_sync` into a queue. `rtl-sdr-rs` exposes only synchronous bulk reads, and any work between reads lets the device FIFO overflow and drop samples (which leaves the spectrum intact but corrupts data like RDS). A dedicated tight read loop keeps the device drained; `Source::read` drains the queue, and retunes are applied between reads via an atomic.
+- The engine's reader thread loops on `source.read()`, computes the wideband FFT inline (publishing the spectrum/waveform taps), and pushes the raw IQ into a lock-free SPSC ring (`rtrb`) for the decode worker. This ring is the realized "broadcast" boundary; on overflow the reader drops rather than blocks. Control messages are applied between reads: retune (`Tune`), reconfigure the spectrum analyzer (`SetSpectrum`), publish rate (`SetFps`), and `Stop`.
+- The audio callback (not yet built) will pull mixed samples from a ring; the rest of the core exists to keep that ring full.
 
 This layer does not use tokio. Async schedulers introduce nondeterministic wakeup latency, which the audio path cannot tolerate.
 
-**Orchestration (tokio):**
+**Orchestration (a worker thread today, not tokio):**
 
-- Channel lifecycle, control messages, and the event bus run as async tasks.
-- Each decoder runs as one tokio task, making decoders independent and parallel across each other. CPU-bound decode work (FFTs, filtering, image reconstruction) is dispatched to a blocking/compute pool rather than run on async workers: tokio's worker pool is sized for IO, and a CPU-bound task that does not yield would occupy a worker and starve the others. The task handles orchestration; the compute pool handles computation.
-- Decode output is always decoupled from the audio path. A decoder emits structured events to the bus and cannot stall audio regardless of its latency. Inexpensive decoders may compute inline, but their output is decoupled either way.
-- Recording and file IO are async and run off the hot path.
+- A decode worker thread drains the IQ ring and runs each active `Channel` (NCO mixer → low-pass + decimate → FM demodulate → decoder), forwarding decoded `Event`s back over an `mpsc` event bus. The front-end drains the bus with `Engine::drain_events`. Channels are replaced atomically via `Engine::set_channels` (the band scanner uses this to swap the per-window station set on each retune).
+- This is a plain thread, not tokio: the decode path is CPU-bound, not async IO, so a worker thread is the minimum effective abstraction and matches the realtime style. tokio is deferred until genuinely async orchestration (network export, disk recording) needs it. Multi-channel parallelism (rayon over channels) and an FFT channelizer are the scaling levers if one worker can't keep up; today a handful of channels at ~1 MS/s keeps up.
+- Decode output is decoupled from the realtime path: a decoder emits structured events and cannot stall the reader regardless of its latency.
 
 ---
 
@@ -99,29 +95,30 @@ This layer does not use tokio. Async schedulers introduce nondeterministic wakeu
 
 A Cargo workspace with a strict dependency direction. Leaf crates are pure and IO-free, the two front-ends sit on top, and dependencies point inward. No core crate has knowledge of the UI.
 
-- **`core`**: shared types and traits. Sample types, the `Event` type, configuration, and the central traits (`Source`, `Demodulator`, `Decoder`, the tap/stage interface). Its only dependency is `num-complex`, which provides the `Complex<f32>` sample type (re-exported as `core::Iq`) that stays consistent across the stack; it is otherwise IO/async/UI-free. All other crates depend on it.
-- **`dsp`**: signal processing. FFT, filters, decimation, demodulators. No IO, hardware, or async. The most heavily unit-tested crate, since it is both the easiest to test in isolation and the easiest to get subtly wrong.
-- **`device`**: `Source` implementations. The RTL-SDR driver (hardware and USB), the file replay source, and the pre-trigger ring. The only crate that accesses hardware.
-- **`decode`**: decoder tails. Depends on `dsp` (decoders reuse filters and demodulators) and emits `core::Event` values. Tested against recorded fixtures.
-- **`engine`**: the runtime. Assembles a `Source`, channels, decoders, mixer, and event bus into a running system, owns the threading model, and exposes a control surface (tune, add channel, start decoder, record). UI-agnostic, with IO injected: the source is passed in as a trait object, which is what makes the system testable and replayable.
-- **`app`**: the GPUI front-end. Depends on `engine`. Handles rendering and has no knowledge of DSP internals beyond the tap snapshots and events that `engine` provides.
-- **`cli`**: a headless front-end and the decoder test harness. Depends on `engine`. Pipes a recorded file through the real pipeline and prints or asserts on events. This crate is load-bearing: because `cli` and `app` are peers over the same `engine`, the core cannot acquire a UI dependency, and the same code provides a headless processing tool.
+- **`core`**: shared types and the `Source` trait. The `Complex<f32>` sample type (re-exported as `core::Iq`, from `num-complex`) and the error type. IO/async/UI-free. All other crates depend on it.
+- **`dsp`**: signal processing. FFT, windowed-sinc FIR (low-pass/band-pass, RRC), decimation, the complex `Nco` mixer, the `FmDemod` discriminator, and a `Pll`. No IO, hardware, or async. The most heavily unit-tested crate.
+- **`device`**: `Source` implementations. The RTL-SDR driver (with the drop-free reader thread) and the `FileSource` replay source. The only crate that accesses hardware.
+- **`decode`**: decoder tails. Defines the `Decoder` trait and `Event` enum, and contains the RDS decoder (pilot-locked 57 kHz recovery, biphase symbol sync, block sync with single-burst error correction, group parsing → PI/PS/RadioText/PTY, RT+ (structured now-playing title/artist), Long PS, PTYN, and clock-time). Depends on `dsp`. Tested against synthetic signals and a recorded fixture.
+- **`engine`**: the runtime. Owns the reader thread, the wideband-FFT taps, the IQ ring, and the decode worker that runs `Channel`s (`engine::channel`) and emits `ChannelEvent`s. Exposes the control surface (tune, set_channels, drain_events). UI-agnostic, with the source injected as a trait object.
+- **`app`**: the GPUI front-end. Depends on `engine`. Renders the spectrum/waterfall from tap snapshots.
+- **`cli`**: a headless front-end (`device list/info`, `listen`, `record`). Depends on `engine`.
+- **`scanner`**: the FM-band RDS scanner. Plans device-bandwidth windows over the station grid, drives the engine (tune + set_channels per window), folds decoded events into a station table, and renders a live TUI (`scan`) or decodes one station headlessly (`probe`). Depends on `engine`.
 
 ```
 core ←── dsp ←── decode ──┐
   ↑       ↑               │
   └── device              │
           ↑               ↓
-          └──────────── engine ──→ { app, cli }
+          └──────────── engine ──→ { app, cli, scanner }
 ```
 
-`engine` exists as a separate crate so that `app` and `cli` are interchangeable consumers. If orchestration lived in `app`, the CLI would have to reimplement it and the two would diverge. A single runtime supports both front-ends.
+`engine` exists as a separate crate so the front-ends are interchangeable consumers over one runtime. `app`, `cli`, and `scanner` are peers, which keeps the core free of any UI dependency.
 
 ---
 
 ## Key traits
 
-`Source` is implemented (in `core::source`); `Demodulator` and `Decoder` remain interface sketches that will be refined in code.
+`Source` (in `core::source`) and `Decoder` (in `decode`) are implemented; the `Demodulator` sketch is unbuilt (FM is a concrete `dsp::FmDemod` for now, since RDS is the only tail).
 
 ```rust
 // A producer of raw IQ. Live hardware and recorded files are peers.
@@ -141,14 +138,14 @@ trait Demodulator {
     fn demod(&mut self, baseband: &[Complex<f32>], audio: &mut Vec<f32>);
 }
 
-// Consumes a stage's output, emits structured events when it recovers meaning.
-trait Decoder {
-    fn input(&self) -> StageKind;                        // IQ | Audio | Bits (what it subscribes to)
-    fn process(&mut self, samples: &Samples) -> Vec<Event>;
+// Consumes demodulated samples, emits structured events when it recovers meaning.
+// Implemented by `RdsDecoder`; the engine owns one per channel and feeds it FM multiplex blocks.
+trait Decoder: Send {
+    fn feed(&mut self, samples: &[f32]) -> Vec<Event>;
 }
 ```
 
-The trait sketches leave one question open: decoders do not all consume the same data. Some require baseband IQ, some require demodulated audio, and some require a recovered bitstream. The sketch handles this with a declared input kind and a tagged sample type, so a decoder subscribes to the appropriate stage tap. This is the reason the tap mechanism and the decoder input mechanism are unified. Whether the input type remains a single `Samples` enum or splits into per-kind traits should be settled once several real decoders exist.
+The realized `Decoder` takes real demodulated samples (FM multiplex or audio) and returns `Event`s. RDS, the only tail so far, consumes the multiplex; a future raw-IQ decoder would want a different input. The original sketch anticipated this with a declared input kind (`IQ | Audio | Bits`); that generalization is deferred until a second decoder needs it, to avoid an abstraction with one caller.
 
 ---
 
@@ -186,7 +183,11 @@ The division is deliberate: buy the plumbing, build the signal processing. Hardw
 
 **Buy, FFT.** `rustfft` (auto-detects AVX/SSE/NEON, supports any size, O(n log n)) with `num-complex` for the sample type. Since rustfft re-exports num-complex, the type is consistent across the stack without conversion. `realfft` is optional, for the real-input spectrum path. This is the complete math-dependency list.
 
+**Buy, plumbing.** `rtrb` for the lock-free SPSC IQ ring between the reader and the decode worker; `ratatui` + `crossterm` for the scanner TUI.
+
 **Build, everything else.** The tuner (complex NCO), FIR filtering and decimation, demodulators (AM/FM/SSB), AGC, and the decoder-side work (clock/symbol recovery, framing, parity). These live in `dsp` and `decode`. They are small, and implementing them is where the project's learning value lies.
+
+**Build profile.** `dsp`, `decode`, and `engine` are compiled at `opt-level = 2` even in dev/test builds (a per-package override in the root `Cargo.toml`). Their tight per-sample loops are ~20x slower unoptimized: at opt-level 0 a single channel only just reaches realtime, so the scanner cannot keep up and the decode tests take ~48s. The app and UI crates keep the default opt-level for fast incremental compiles and easy debugging.
 
 ---
 
@@ -195,5 +196,6 @@ The division is deliberate: buy the plumbing, build the signal processing. Hardw
 The following are deliberately unsettled, to be resolved in code or a later document.
 
 - **Recording file format.** SigMF (raw samples plus a JSON metadata sidecar) is the current preference: it is the community standard, it is interoperable with other tools, and its annotation support can hold expected-event metadata for golden fixtures. The simpler alternative is plain interleaved `cf32`/`cu8` with a minimal header. This should be decided before fixtures accumulate, since migrating them later is costly. Until then, `FileSource` reads headerless raw interleaved `cu8` (the RTL native format), with sample rate and center frequency supplied by the caller.
-- **Decoder input typing.** A single tagged `Samples` enum versus per-kind traits (see Key traits).
-- **Channel scheduling.** Whether the DSP pool is a work-stealing pool (rayon-style) or hand-rolled. Settle this against a measured multi-channel load.
+- **Decoder input typing.** `Decoder::feed(&[f32])` takes demodulated samples today; a per-kind input (IQ vs audio vs bits) waits for a second decoder (see Key traits).
+- **Channel scheduling.** The decode worker runs channels sequentially on one thread; this keeps up with a handful of channels at ~1 MS/s. Parallelizing across channels (rayon) or an FFT channelizer is the lever if a wider window or higher rate outgrows it.
+- **Capture rate.** `read_sync` (the only API `rtl-sdr-rs` exposes) keeps up drop-free to ~1.2 MS/s but not 2.4 MS/s, so the scanner runs at ~1 MS/s. True async USB streaming (more queued transfers) would lift this.

@@ -1,0 +1,20 @@
+[package]
+name = "sdr-scanner"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+
+[lib]
+name = "sdr_scanner"
+path = "src/lib.rs"
+
+[[bin]]
+name = "sdr-scan"
+path = "src/main.rs"
+
+[dependencies]
+sdr-engine.workspace = true
+clap = { version = "4.6.1", features = ["derive"] }
+ctrlc = "3.5.2"
+ratatui = "0.30.1"
+crossterm = "0.29.0"

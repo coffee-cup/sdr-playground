@@ -3,10 +3,20 @@
 //! libusb is statically linked in (see the `vendored` feature in `Cargo.toml`), so this
 //! works with no system library install.
 
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::mpsc::{self, Receiver};
+use std::sync::Arc;
+use std::thread::{self, JoinHandle};
+
 use rtl_sdr_rs::{DeviceId, RtlSdr, TunerGain};
 use sdr_core::{Error, Iq, Result, Source};
 
 use crate::convert;
+
+/// Bytes per `read_sync` on the reader thread. The thread does nothing but read and enqueue, so
+/// the gap between USB transfers stays tiny (the device FIFO never overflows the way it does
+/// when demodulation work sits between synchronous reads).
+const READ_BYTES: usize = 1 << 16;
 
 /// RTL-SDR USB bulk transfer granularity, in bytes. Reads that are a multiple of it stream
 /// most efficiently.
@@ -63,11 +73,19 @@ pub struct DeviceInfo {
 }
 
 pub struct RtlSdrSource {
-    sdr: RtlSdr,
     info: DeviceInfo,
     sample_rate: u32,
-    center_freq: u64,
-    byte_buf: Vec<u8>,
+    /// Shared with the reader thread: the live center frequency and pending retune request.
+    center_freq: Arc<AtomicU64>,
+    tune_req: Arc<AtomicU64>,
+    stop: Arc<AtomicBool>,
+    /// Raw cu8 chunks from the reader thread, plus a cursor into the current chunk.
+    rx: Receiver<Vec<u8>>,
+    chunk: Vec<u8>,
+    pos: usize,
+    /// Supported tuner gain steps, captured at open (the device now lives on the reader thread).
+    gains: Vec<i32>,
+    reader: Option<JoinHandle<()>>,
 }
 
 fn device_err(e: impl std::fmt::Display) -> Error {
@@ -98,6 +116,9 @@ impl RtlSdrSource {
 
         let mut sdr = RtlSdr::open(DeviceId::Index(index)).map_err(device_err)?;
         sdr.set_sample_rate(cfg.sample_rate).map_err(device_err)?;
+        // The tuner quantizes the rate; the actual delivered rate (not the request) is what the
+        // sample timing is based on, so downstream decoders must use it.
+        let actual_rate = sdr.get_sample_rate();
         let freq = u32::try_from(cfg.freq_hz)
             .map_err(|_| Error::Config(format!("frequency {} Hz out of range", cfg.freq_hz)))?;
         sdr.set_center_freq(freq).map_err(device_err)?;
@@ -113,12 +134,59 @@ impl RtlSdrSource {
             tuner,
         };
 
+        let gains = sdr.get_tuner_gains().unwrap_or_default();
+        let center_freq = Arc::new(AtomicU64::new(cfg.freq_hz));
+        let tune_req = Arc::new(AtomicU64::new(0));
+        let stop = Arc::new(AtomicBool::new(false));
+        let (tx, rx) = mpsc::channel::<Vec<u8>>();
+
+        // Reader thread: tight read_sync loop into the channel, applying retunes between reads.
+        // Keeping the device drained continuously is what avoids dropped samples.
+        let reader = {
+            let (center_freq, tune_req, stop) = (
+                Arc::clone(&center_freq),
+                Arc::clone(&tune_req),
+                Arc::clone(&stop),
+            );
+            thread::Builder::new()
+                .name("rtl-read".into())
+                .spawn(move || {
+                    let mut sdr = sdr;
+                    let mut buf = vec![0u8; READ_BYTES];
+                    while !stop.load(Ordering::Relaxed) {
+                        let req = tune_req.swap(0, Ordering::AcqRel);
+                        if req != 0 {
+                            if let Ok(f) = u32::try_from(req) {
+                                if sdr.set_center_freq(f).is_ok() {
+                                    center_freq.store(req, Ordering::Release);
+                                }
+                            }
+                        }
+                        match sdr.read_sync(&mut buf) {
+                            Ok(0) => continue,
+                            Ok(n) => {
+                                if tx.send(buf[..n].to_vec()).is_err() {
+                                    break;
+                                }
+                            }
+                            Err(_) => break,
+                        }
+                    }
+                })
+                .expect("spawn rtl-read thread")
+        };
+
         Ok(Self {
-            sdr,
             info,
-            sample_rate: cfg.sample_rate,
-            center_freq: cfg.freq_hz,
-            byte_buf: Vec::new(),
+            sample_rate: actual_rate,
+            center_freq,
+            tune_req,
+            stop,
+            rx,
+            chunk: Vec::new(),
+            pos: 0,
+            gains,
+            reader: Some(reader),
         })
     }
 
@@ -128,7 +196,16 @@ impl RtlSdrSource {
 
     /// The gain steps the tuner supports, in tenths of a dB.
     pub fn supported_gains(&self) -> Result<Vec<i32>> {
-        self.sdr.get_tuner_gains().map_err(device_err)
+        Ok(self.gains.clone())
+    }
+}
+
+impl Drop for RtlSdrSource {
+    fn drop(&mut self) {
+        self.stop.store(true, Ordering::Release);
+        if let Some(reader) = self.reader.take() {
+            let _ = reader.join();
+        }
     }
 }
 
@@ -138,14 +215,13 @@ impl Source for RtlSdrSource {
     }
 
     fn center_freq(&self) -> u64 {
-        self.center_freq
+        self.center_freq.load(Ordering::Acquire)
     }
 
     fn tune(&mut self, hz: u64) -> Result<()> {
-        let freq = u32::try_from(hz)
-            .map_err(|_| Error::Config(format!("frequency {hz} Hz out of range")))?;
-        self.sdr.set_center_freq(freq).map_err(device_err)?;
-        self.center_freq = hz;
+        u32::try_from(hz).map_err(|_| Error::Config(format!("frequency {hz} Hz out of range")))?;
+        // Hand the retune to the reader thread, which applies it between reads.
+        self.tune_req.store(hz, Ordering::Release);
         Ok(())
     }
 
@@ -156,9 +232,19 @@ impl Source for RtlSdrSource {
     }
 
     fn read(&mut self, out: &mut [Iq]) -> Result<usize> {
-        let want = out.len() * 2;
-        self.byte_buf.resize(want, 0);
-        let got = self.sdr.read_sync(&mut self.byte_buf).map_err(device_err)?;
-        Ok(convert::cu8_to_iq(&self.byte_buf[..got], out))
+        // Refill from the reader thread when the current chunk is drained. Blocking here is fine:
+        // the device keeps streaming into the channel meanwhile, so no samples are lost.
+        if self.pos >= self.chunk.len() {
+            match self.rx.recv() {
+                Ok(chunk) => {
+                    self.chunk = chunk;
+                    self.pos = 0;
+                }
+                Err(_) => return Ok(0), // reader thread stopped: end of stream
+            }
+        }
+        let n = convert::cu8_to_iq(&self.chunk[self.pos..], out);
+        self.pos += n * 2;
+        Ok(n)
     }
 }

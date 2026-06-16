@@ -6,7 +6,8 @@
 
 mod format;
 
-use std::io::Write;
+use std::fs::File;
+use std::io::{BufWriter, Write};
 use std::process::ExitCode;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
@@ -16,7 +17,8 @@ use clap::{Args, Parser, Subcommand};
 use owo_colors::OwoColorize;
 
 use sdr_engine::{
-    Engine, EngineConfig, FileSource, Gain, RtlConfig, RtlSdrSource, Source, SpectrumConfig,
+    iq_to_cu8, Engine, EngineConfig, FileSource, Gain, Iq, RtlConfig, RtlSdrSource, Source,
+    SpectrumConfig,
 };
 
 #[derive(Parser)]
@@ -37,6 +39,8 @@ enum Command {
     Device(DeviceCmd),
     /// Read IQ from a device (or file) and show a live readout.
     Listen(ListenArgs),
+    /// Record raw IQ from a device to a replayable cu8 file.
+    Record(RecordArgs),
 }
 
 #[derive(Subcommand)]
@@ -76,12 +80,35 @@ struct ListenArgs {
     fft_size: usize,
 }
 
+#[derive(Args)]
+struct RecordArgs {
+    /// Device index among detected RTL-SDRs.
+    #[arg(long, default_value_t = 0)]
+    index: usize,
+    /// Center frequency, e.g. 98.5M.
+    #[arg(long, value_parser = format::parse_freq, default_value = "100M")]
+    freq: u64,
+    /// Sample rate, e.g. 2.4M (or 250k to capture a single FM station's full MPX).
+    #[arg(long, value_parser = format::parse_rate, default_value = "2.4M")]
+    rate: u32,
+    /// Tuner gain: `auto` or a value in dB (e.g. 40).
+    #[arg(long, value_parser = format::parse_gain, default_value = "auto")]
+    gain: Gain,
+    /// How long to record, in seconds.
+    #[arg(long, default_value_t = 6.0)]
+    secs: f64,
+    /// Output path for the raw cu8 file.
+    #[arg(long)]
+    out: String,
+}
+
 fn main() -> ExitCode {
     let cli = Cli::parse();
     let result = match cli.command {
         Command::Device(DeviceCmd::List) => device_list(),
         Command::Device(DeviceCmd::Info(args)) => device_info(args.index),
         Command::Listen(args) => listen(args),
+        Command::Record(args) => record(args),
     };
 
     match result {
@@ -166,6 +193,71 @@ fn listen(args: ListenArgs) -> Result<(), String> {
         ..Default::default()
     };
     run_live(Engine::start(source, config), args.rate);
+    Ok(())
+}
+
+fn record(args: RecordArgs) -> Result<(), String> {
+    if args.secs <= 0.0 {
+        return Err("secs must be positive".into());
+    }
+    let cfg = RtlConfig {
+        freq_hz: args.freq,
+        sample_rate: args.rate,
+        gain: args.gain,
+    };
+    let mut source = RtlSdrSource::open(args.index, cfg).map_err(|e| e.to_string())?;
+    // The device quantizes the rate; record (and label) at what it actually delivers.
+    let rate = source.sample_rate();
+    let file = File::create(&args.out).map_err(|e| format!("create {}: {e}", args.out))?;
+    let mut writer = BufWriter::new(file);
+
+    let target = (rate as f64 * args.secs).round() as u64;
+    println!(
+        "{}  {}  rate={} (requested {})  gain={}  {} {}",
+        "recording".bold(),
+        format::freq(args.freq).bold(),
+        format::rate(rate).bold(),
+        format::rate(args.rate),
+        format::gain_label(args.gain).bold(),
+        "→".dimmed(),
+        args.out.bold(),
+    );
+    println!("{}", "Ctrl-C to stop early.".dimmed());
+
+    let stop = Arc::new(AtomicBool::new(false));
+    let handler_flag = Arc::clone(&stop);
+    let _ = ctrlc::set_handler(move || handler_flag.store(true, Ordering::SeqCst));
+
+    let mut iq = vec![Iq::default(); 1 << 16];
+    let mut bytes = vec![0u8; iq.len() * 2];
+    let mut written: u64 = 0;
+    let mut stdout = std::io::stdout();
+    while !stop.load(Ordering::SeqCst) && written < target {
+        let n = source.read(&mut iq).map_err(|e| e.to_string())?;
+        if n == 0 {
+            break;
+        }
+        let take = (n as u64).min(target - written) as usize;
+        let nb = iq_to_cu8(&iq[..take], &mut bytes);
+        writer.write_all(&bytes[..nb]).map_err(|e| e.to_string())?;
+        written += take as u64;
+
+        let _ = write!(
+            stdout,
+            "\r{} {} / {} samples",
+            "[rec]".dimmed(),
+            format::count(written).bold(),
+            format::count(target),
+        );
+        let _ = stdout.flush();
+    }
+    writer.flush().map_err(|e| e.to_string())?;
+    println!(
+        "\n{} {} ({} samples)",
+        "done:".bold(),
+        args.out.bold(),
+        format::count(written),
+    );
     Ok(())
 }
 

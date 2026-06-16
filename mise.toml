@@ -17,6 +17,16 @@ run = "cargo run -p sdr-app"
 description = "Run the headless CLI (pass args after --)"
 run = "cargo run -q -p sdr-cli --"
 
+# The band scanner. `scan` launches the TUI (for you to run, like `app`); `probe` decodes one
+# station headlessly. Forward args after `--`, e.g. `mise run probe -- --freq 92.5M`.
+[tasks.scan]
+description = "Scan the FM band for RDS song/artist data (TUI)"
+run = "cargo run -q -p sdr-scanner -- scan"
+
+[tasks.probe]
+description = "Decode RDS from one station headlessly (pass args after --)"
+run = "cargo run -q -p sdr-scanner -- probe"
+
 [tasks.test]
 description = "Run all tests"
 run = "cargo test --workspace"
@@ -40,3 +50,18 @@ depends = ["fmt-check", "clippy"]
 [tasks.ci]
 description = "Full CI: check + test"
 depends = ["check", "test"]
+
+# Validation. `validate` is the full no-device check (lint + all tests, including the recorded
+# RDS fixture). `validate-live` decodes a real station off a plugged-in RTL-SDR (set
+# SDR_LIVE_FREQ_HZ to pick it); it skips cleanly if no device is present.
+[tasks.validate]
+description = "Validate everything that needs no device (lint + tests + golden fixture)"
+depends = ["ci"]
+
+[tasks.validate-live]
+description = "Validate live decode against a plugged-in RTL-SDR (SDR_LIVE_FREQ_HZ to choose station)"
+run = "cargo test -p sdr-engine --release --test live -- --ignored --nocapture"
+
+[tasks.bench]
+description = "Decode-throughput benchmarks (criterion), replaying the recorded fixture"
+run = "cargo bench -p sdr-engine"

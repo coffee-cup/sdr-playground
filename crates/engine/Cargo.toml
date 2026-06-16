@@ -10,3 +10,11 @@ sdr-dsp.workspace = true
 sdr-device.workspace = true
 sdr-decode.workspace = true
 arc-swap = "1.9.1"
+rtrb = "0.3.4"
+
+[dev-dependencies]
+criterion = { version = "0.5", default-features = false, features = ["cargo_bench_support"] }
+
+[[bench]]
+name = "decode"
+harness = false
