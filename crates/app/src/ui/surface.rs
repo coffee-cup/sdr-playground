@@ -1,6 +1,5 @@
-//! Flat surfaces. An `inset` is the near-black well used for anything that displays signal
-//! (spectrum, waterfall, waveform, scrubber track): flat, with a hairline border and the theme's
-//! small radius.
+//! Flat surfaces. An `inset` is the near-black well used for sunken areas (the inspect waveform,
+//! the transport scrubber track): flat, with a hairline border and the theme's small radius.
 
 use gpui::{div, App, Div, Styled};
 use gpui_component::ActiveTheme;

@@ -86,7 +86,7 @@ fn header(app: &SdrApp, dbfs: f32, cx: &mut Context<SdrApp>) -> impl IntoElement
 }
 
 /// Spectrum (with dB axis + frequency scale) over the scrolling waterfall, split by a draggable
-/// handle. The red tuned-marker line and channel-bandwidth band overlay the spectrum.
+/// handle. The tuned-marker line and channel-bandwidth band overlay the spectrum.
 fn spectrum_over_waterfall(app: &SdrApp, cx: &mut Context<SdrApp>) -> impl IntoElement {
     let Some(engine) = app.radio().engine() else {
         return div().into_any_element();
@@ -234,7 +234,7 @@ fn display_layer(
     layer.into_any_element()
 }
 
-/// The tuned-frequency marker overlay at horizontal fraction `x`: the red line plus the
+/// The tuned-frequency marker overlay at horizontal fraction `x`: the accent line plus the
 /// translucent channel-bandwidth band. Shown on the spectrum only (the waterfall has none).
 fn marker(x: f32, bandwidth: u32, sample_rate: u32, cx: &mut Context<SdrApp>) -> AnyElement {
     let center = cx.theme().primary;

@@ -1,5 +1,5 @@
 //! Label/value building blocks for panels: a section label, a label+control row, and a key/value
-//! row (muted key, mono value). These replace the inline helpers that each panel used to carry.
+//! row (muted key, mono value).
 
 use gpui::{div, AnyElement, App, IntoElement, ParentElement, Styled};
 use gpui_component::ActiveTheme;
@@ -32,7 +32,7 @@ pub fn field_row(label: &str, control: AnyElement, cx: &App) -> impl IntoElement
         .child(control)
 }
 
-/// A key/value row: muted key on the left, mono value (in data cyan) on the right.
+/// A key/value row: muted key on the left, mono value on the right.
 pub fn kv_row(key: &str, value: &str, cx: &App) -> impl IntoElement {
     div()
         .flex()
