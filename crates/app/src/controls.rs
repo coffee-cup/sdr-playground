@@ -9,7 +9,7 @@ use gpui_component::select::{SearchableVec, SelectEvent, SelectState};
 use crate::app::SdrApp;
 use crate::colormap::Colormap;
 use crate::settings::{
-    bandwidth_label, Settings, WindowChoice, AVG_PRESETS, BW_PRESETS, FFT_SIZES, FPS_CHOICES,
+    bandwidth_label, Settings, WindowChoice, BW_PRESETS, FFT_SIZES, FPS_CHOICES,
 };
 use crate::ui::DropdownState;
 
@@ -21,7 +21,6 @@ pub struct SettingsControls {
     pub window: DropdownState<WindowChoice>,
     pub colormap: DropdownState<Colormap>,
     pub fps: DropdownState<f32>,
-    pub averaging: DropdownState<f32>,
     pub bandwidth: DropdownState<u32>,
 }
 
@@ -66,15 +65,6 @@ impl SettingsControls {
             window,
             cx,
         );
-        let averaging = DropdownState::new(
-            AVG_PRESETS.iter().map(|&(v, l)| (l.into(), v)).collect(),
-            AVG_PRESETS
-                .iter()
-                .position(|&(v, _)| (v - settings.averaging).abs() < 0.01)
-                .unwrap_or(0),
-            window,
-            cx,
-        );
         let bandwidth = DropdownState::new(
             BW_PRESETS
                 .iter()
@@ -104,11 +94,6 @@ impl SettingsControls {
         cx.subscribe(&fps.state, on_pick(|a| &a.controls().fps, SdrApp::set_fps))
             .detach();
         cx.subscribe(
-            &averaging.state,
-            on_pick(|a| &a.controls().averaging, SdrApp::set_averaging),
-        )
-        .detach();
-        cx.subscribe(
             &bandwidth.state,
             on_pick(|a| &a.controls().bandwidth, SdrApp::set_bandwidth),
         )
@@ -119,7 +104,6 @@ impl SettingsControls {
             window: window_dd,
             colormap,
             fps,
-            averaging,
             bandwidth,
         }
     }

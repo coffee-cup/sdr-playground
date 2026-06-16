@@ -14,3 +14,9 @@ pub const TEXT_AXIS: Pixels = px(12.);
 /// Width of the spectrum dB-axis gutter; the frequency scale is inset by the same amount so its
 /// labels line up under the plot.
 pub const DB_AXIS_WIDTH: Pixels = px(44.);
+
+/// Flat corner radius for chrome (matches the theme's radius).
+pub const RADIUS: Pixels = px(2.);
+
+/// Height of a device/section header strip and the tab/transport strips.
+pub const HEADER_H: Pixels = px(28.);

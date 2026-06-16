@@ -8,8 +8,11 @@ use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 pub enum Colormap {
-    /// gqrx's classic waterfall palette: black → blue → cyan → yellow → red → white.
+    /// Cool ramp (deep blue → cyan → white) that complements the app's orange chrome accent.
+    /// The default, per `docs/UI.md`.
     #[default]
+    Ice,
+    /// gqrx's classic waterfall palette: black → blue → cyan → yellow → red → white.
     Gqrx,
     /// Perceptual inferno: dark purple → magenta → orange → pale yellow. More dynamic range,
     /// keeps the noise floor dark.
@@ -17,13 +20,12 @@ pub enum Colormap {
 }
 
 impl Colormap {
-    /// All palettes, for the (eventual) UI selector.
-    #[allow(dead_code)]
-    pub const ALL: [Colormap; 2] = [Colormap::Gqrx, Colormap::Inferno];
+    /// All palettes, for the UI selector.
+    pub const ALL: [Colormap; 3] = [Colormap::Ice, Colormap::Gqrx, Colormap::Inferno];
 
-    #[allow(dead_code)]
     pub fn label(self) -> &'static str {
         match self {
+            Colormap::Ice => "Ice",
             Colormap::Gqrx => "Gqrx",
             Colormap::Inferno => "Inferno",
         }
@@ -32,6 +34,10 @@ impl Colormap {
     /// The palette's 256-entry BGRA lookup table, built once.
     pub fn lut(self) -> &'static [[u8; 4]; 256] {
         match self {
+            Colormap::Ice => {
+                static LUT: OnceLock<[[u8; 4]; 256]> = OnceLock::new();
+                LUT.get_or_init(ice)
+            }
             Colormap::Gqrx => {
                 static LUT: OnceLock<[[u8; 4]; 256]> = OnceLock::new();
                 LUT.get_or_init(gqrx)
@@ -42,6 +48,19 @@ impl Colormap {
             }
         }
     }
+}
+
+/// Ice, interpolated from RGB stops: near-black → blue → cyan → white.
+fn ice() -> [[u8; 4]; 256] {
+    const STOPS: [(f32, f32, f32, f32); 6] = [
+        (0.00, 8.0, 12.0, 20.0),
+        (0.35, 16.0, 52.0, 96.0),
+        (0.60, 30.0, 120.0, 176.0),
+        (0.78, 70.0, 190.0, 224.0),
+        (0.90, 150.0, 224.0, 240.0),
+        (1.00, 232.0, 246.0, 252.0),
+    ];
+    stops_to_lut(&STOPS)
 }
 
 /// A port of gqrx's default waterfall colormap (`qtgui` plotter), piecewise in index space.
@@ -87,14 +106,19 @@ fn inferno() -> [[u8; 4]; 256] {
         (0.90, 251.0, 162.0, 35.0),
         (1.00, 252.0, 255.0, 164.0),
     ];
+    stops_to_lut(&STOPS)
+}
+
+/// Build a 256-entry BGRA lookup table by linearly interpolating `(t, r, g, b)` RGB stops.
+fn stops_to_lut(stops: &[(f32, f32, f32, f32)]) -> [[u8; 4]; 256] {
     let mut lut = [[0u8; 4]; 256];
     for (i, entry) in lut.iter_mut().enumerate() {
         let t = i as f32 / 255.0;
         let mut j = 0;
-        while j < STOPS.len() - 1 && t > STOPS[j + 1].0 {
+        while j < stops.len() - 1 && t > stops[j + 1].0 {
             j += 1;
         }
-        let (a, b) = (STOPS[j], STOPS[j + 1]);
+        let (a, b) = (stops[j], stops[j + 1]);
         let f = ((t - a.0) / (b.0 - a.0)).clamp(0.0, 1.0);
         let r = (a.1 + (b.1 - a.1) * f) as u8;
         let g = (a.2 + (b.2 - a.2) * f) as u8;

@@ -40,6 +40,8 @@ fn main() {
         // per-element via the theme's mono family.
         Theme::change(ThemeMode::Dark, None, cx);
         Theme::global_mut(cx).mono_font_family = "JetBrains Mono".into();
+        // Recolor to the Ableton-dark palette (must run after Theme::change, which resets colors).
+        ui::theme::apply(cx);
 
         cx.spawn(async move |cx| {
             let options = WindowOptions {

@@ -175,6 +175,30 @@ The UI reads tap snapshots at frame rate and does not reach into the signal path
 
 ---
 
+## Persistence
+
+Two stores, split by the shape of the data.
+
+**UI/session settings** persist in a small embedded key-value store (`redb`) under the platform
+app-support directory, owned by `app`. These are a single settings record, not a queryable table, so
+a KV store is the minimum effective fit. There is no manual save: every change is written (debounced,
+so a slider drag collapses to one write) and the full state is restored on launch. Covered today:
+center frequency, marker bandwidth, FFT size and window, frame rate, colormap, display averaging,
+dB-scale mode and range, and the active workspace. (Panel sizes and collapsed flags are intended to
+join this set but are not persisted yet.)
+
+**Bookmarks and history** will live in a single SQLite database, owned by `engine` and surfaced by the
+UI, because both are queryable, filterable tables and it needs no server. Not yet implemented.
+
+- **Bookmarks** (the Library): name, frequency, mode, bandwidth, band, favorite flag, last-used time.
+- **Events** (the history): timestamp, type, source channel, decoded payload, and an optional reference
+  to the IQ recording segment that produced it. Indexed by time, type, and channel for fast filtering.
+
+The data-flow side: the event bus writes decoded events into the events table, and tuning reads
+bookmarks. This keeps the queryable data behind `engine` and the session/UI state with `app`.
+
+---
+
 ## Dependencies: build vs. buy
 
 The division is deliberate: buy the plumbing, build the signal processing. Hardware access and the FFT are solved problems with no learning value in reimplementation. Everything between samples and meaning is the substance of the project and is written by hand.

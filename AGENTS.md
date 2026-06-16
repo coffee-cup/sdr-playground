@@ -47,3 +47,15 @@ core <- dsp / device / decode <- engine <- { app, cli }
 The UI is GPUI + gpui-component. Before building or changing UI, use the `gpui-component`
 skill (`.agents/skills/gpui-component/`) and the component gallery:
 https://longbridge.github.io/gpui-component/docs/components/
+
+Follow the look and feel in `docs/UI.md` (flat Ableton-dark: warm-gray surfaces, near-black
+insets, orange accent + cyan data). The canonical visual reference is `docs/style-refs/ableton.html`.
+
+- **Use the reusable component kit in `crates/app/src/ui/`** — `inset`, `value_box`, `segmented`,
+  `tab_strip`, `icon_button`, `segmented_meter`, `device_header`, `field_row`/`kv_row`/`section_label`,
+  `knob`, `dropdown`. Compose from these; don't hand-roll inline panels/buttons/rows. If a new pattern
+  recurs, add it to the kit rather than duplicating it.
+- **Never hardcode color.** Read it from the theme (`cx.theme()`) or the app palette (`ui::palette(cx)`
+  for inset/data/meter colors). The palette is defined once in `ui/theme.rs` and written into the
+  gpui-component theme; widen that, not call sites.
+- Mono font (JetBrains Mono) is for numeric data only; labels use the UI font, sentence case.
