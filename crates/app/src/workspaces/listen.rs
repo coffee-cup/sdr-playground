@@ -1,7 +1,6 @@
 use std::cell::Cell;
 use std::rc::Rc;
 
-use gpui::prelude::FluentBuilder;
 use gpui::*;
 use gpui_component::button::{Button, ButtonVariants};
 use gpui_component::resizable::{h_resizable, resizable_panel, v_resizable};
@@ -11,7 +10,10 @@ use crate::app::{Hover, SdrApp};
 use crate::components::{frequency, level_meter};
 use crate::radio::RadioState;
 use crate::signal;
-use crate::ui::{dropdown, tokens};
+use crate::ui::{
+    device_header, dropdown, field_row, inset, knob, kv_row, palette, section_label, segmented,
+    segmented_meter, tab_strip, tokens, MeterDir,
+};
 
 /// Drag payload for scrubbing the tuned marker across the signal display. GPUI's `on_drag` /
 /// `on_drag_move` are used (not `on_mouse_move` + `dragging()`, which is gated by hover and stops
@@ -84,14 +86,14 @@ fn header(app: &SdrApp, dbfs: f32, cx: &mut Context<SdrApp>) -> impl IntoElement
 }
 
 /// Spectrum (with dB axis + frequency scale) over the scrolling waterfall, split by a draggable
-/// handle. The red tuned-marker line and channel-bandwidth band overlay the spectrum.
+/// handle. The tuned-marker line and channel-bandwidth band overlay the spectrum.
 fn spectrum_over_waterfall(app: &SdrApp, cx: &mut Context<SdrApp>) -> impl IntoElement {
     let Some(engine) = app.radio().engine() else {
         return div().into_any_element();
     };
     let snap = engine.snapshot();
-    let line = cx.theme().foreground;
-    let grid = cx.theme().border.opacity(0.4);
+    let line = palette(cx).data;
+    let grid = palette(cx).line_hi.opacity(0.25);
     let axis = cx.theme().muted_foreground;
     let range = app.waterfall().range();
     let bins = app.smoothed_bins().to_vec();
@@ -232,11 +234,11 @@ fn display_layer(
     layer.into_any_element()
 }
 
-/// The tuned-frequency marker overlay at horizontal fraction `x`: the red line plus the
+/// The tuned-frequency marker overlay at horizontal fraction `x`: the accent line plus the
 /// translucent channel-bandwidth band. Shown on the spectrum only (the waterfall has none).
 fn marker(x: f32, bandwidth: u32, sample_rate: u32, cx: &mut Context<SdrApp>) -> AnyElement {
-    let center = cx.theme().danger;
-    let band = cx.theme().foreground.opacity(0.08);
+    let center = cx.theme().primary;
+    let band = cx.theme().primary.opacity(0.12);
     let bw = (bandwidth as f32 / sample_rate.max(1) as f32).clamp(0.0, 1.0);
 
     div()
@@ -311,48 +313,70 @@ fn tooltip(x: f32, y: f32, lines: Vec<String>, cx: &mut Context<SdrApp>) -> impl
         .children(lines.into_iter().map(|l| div().child(l)))
 }
 
-/// Right-hand observability surface: the live waveform, signal readouts, and FFT/display settings.
+/// Right-hand observability surface, styled as a device: a header with a power dot, the live
+/// waveform, signal readouts, the FFT/display settings, and a channel-style level meter down the
+/// edge.
 fn inspect(app: &SdrApp, cx: &mut Context<SdrApp>) -> impl IntoElement {
     let border = cx.theme().border;
+    let running = app.radio().engine().is_some();
+
     let mut panel = div()
         .flex()
         .flex_col()
         .size_full()
         .border_l_1()
         .border_color(border)
-        .child(panel_header("Inspect", cx));
+        .child(device_header("Inspect", Some("demod"), running, cx));
 
     if let Some(engine) = app.radio().engine() {
         let snap = engine.snapshot();
         let spec = engine.spectrum();
-        let wave = cx.theme().chart_2;
+        let wave = palette(cx).data;
+        let frac = (snap.peak_dbfs.clamp(-100.0, 0.0) + 100.0) / 100.0;
+
+        let content = div()
+            .flex()
+            .flex_col()
+            .gap_2()
+            .p_3()
+            .flex_1()
+            .overflow_hidden()
+            .child(section_label("Waveform", cx))
+            .child(
+                inset(cx)
+                    .h(px(72.))
+                    .child(signal::waveform(engine.clone(), wave)),
+            )
+            .child(section_label("Signal", cx))
+            .child(kv_row("Freq", &freq(app.tuned_freq()), cx))
+            .child(kv_row("Rate", &rate(snap.sample_rate), cx))
+            .child(kv_row("Power", &format!("{} dBFS", db(snap.mean_dbfs)), cx))
+            .child(kv_row(
+                "Peak",
+                &peak(&spec.bins_db, spec.center_freq, spec.sample_rate),
+                cx,
+            ))
+            .child(section_label("FFT", cx))
+            .child(fft_settings(app, cx));
+
+        // A mixer-style level meter down the device edge.
+        let vmeter = div()
+            .flex()
+            .w(px(14.))
+            .py_2()
+            .px(px(2.))
+            .border_l_1()
+            .border_color(border)
+            .child(segmented_meter(frac, 16, MeterDir::Vertical, cx));
 
         panel = panel.child(
             div()
                 .flex()
-                .flex_col()
-                .gap_2()
-                .p_3()
+                .flex_row()
+                .flex_1()
                 .overflow_hidden()
-                .child(section("Waveform", cx))
-                .child(
-                    div()
-                        .h(px(72.))
-                        .border_1()
-                        .border_color(border)
-                        .child(signal::waveform(engine.clone(), wave)),
-                )
-                .child(section("Signal", cx))
-                .child(kv("Freq", &freq(app.tuned_freq()), cx))
-                .child(kv("Rate", &rate(snap.sample_rate), cx))
-                .child(kv("Power", &format!("{} dBFS", db(snap.mean_dbfs)), cx))
-                .child(kv(
-                    "Peak",
-                    &peak(&spec.bins_db, spec.center_freq, spec.sample_rate),
-                    cx,
-                ))
-                .child(section("FFT", cx))
-                .child(fft_settings(app, cx)),
+                .child(content)
+                .child(vmeter),
         );
     }
 
@@ -367,33 +391,58 @@ fn fft_settings(app: &SdrApp, cx: &mut Context<SdrApp>) -> impl IntoElement {
         .flex()
         .flex_col()
         .gap_2()
-        .child(setting_row(
+        .child(field_row(
             "FFT Size",
             dropdown(&c.fft).into_any_element(),
             cx,
         ))
-        .child(setting_row(
+        .child(field_row(
             "Window",
             dropdown(&c.window).into_any_element(),
             cx,
         ))
-        .child(setting_row(
+        .child(field_row(
             "Colormap",
             dropdown(&c.colormap).into_any_element(),
             cx,
         ))
-        .child(setting_row("Rate", dropdown(&c.fps).into_any_element(), cx))
-        .child(setting_row(
-            "Averaging",
-            dropdown(&c.averaging).into_any_element(),
-            cx,
-        ))
-        .child(setting_row(
+        .child(field_row("Rate", dropdown(&c.fps).into_any_element(), cx))
+        .child(field_row(
             "Bandwidth",
             dropdown(&c.bandwidth).into_any_element(),
             cx,
         ))
         .child(db_scale(app, cx))
+        .child(averaging_knob(app, cx))
+}
+
+/// The display-smoothing control as an arc knob; scroll over it to adjust (0..0.97).
+fn averaging_knob(app: &SdrApp, cx: &mut Context<SdrApp>) -> impl IntoElement {
+    let avg = app.settings().averaging;
+    let accent = cx.theme().primary;
+    div()
+        .id("avg-knob")
+        .flex()
+        .justify_center()
+        .pt_2()
+        .child(knob(
+            "Smoothing",
+            avg / 0.97,
+            format!("{avg:.2}"),
+            accent,
+            cx,
+        ))
+        .on_scroll_wheel(cx.listener(|app, ev: &ScrollWheelEvent, _window, cx| {
+            let dy = match ev.delta {
+                ScrollDelta::Pixels(p) => f32::from(p.y),
+                ScrollDelta::Lines(l) => l.y,
+            };
+            if dy != 0.0 {
+                let step = if dy > 0.0 { 0.05 } else { -0.05 };
+                let v = (app.settings().averaging + step).clamp(0.0, 0.97);
+                app.set_averaging(v, cx);
+            }
+        }))
 }
 
 /// The dB-window control: an Auto toggle, and −/+ steppers for min/max when manual.
@@ -401,17 +450,16 @@ fn db_scale(app: &SdrApp, cx: &mut Context<SdrApp>) -> impl IntoElement {
     let s = app.settings();
     let auto = s.db_auto;
 
-    let toggle = setting_row(
+    let toggle = field_row(
         "dB Scale",
-        Button::new("set-db-auto")
-            .outline()
-            .small()
-            .label(if auto { "Auto" } else { "Manual" })
-            .on_click(cx.listener(move |app, _, _, cx| {
-                let auto = app.settings().db_auto;
-                app.set_db_auto(!auto, cx);
-            }))
-            .into_any_element(),
+        segmented(
+            "db-scale",
+            &[("Auto", true), ("Manual", false)],
+            auto,
+            cx,
+            |app, v, _, cx| app.set_db_auto(v, cx),
+        )
+        .into_any_element(),
         cx,
     );
 
@@ -436,7 +484,7 @@ fn stepper(
     let mono = cx.theme().mono_font_family.clone();
     let foreground = cx.theme().foreground;
 
-    setting_row(
+    field_row(
         label,
         div()
             .flex()
@@ -488,19 +536,6 @@ impl DbBounds {
         let hi = (s.db_max + delta).clamp(s.db_min + 5.0, 0.0);
         DbBounds(lo, s.db_max, s.db_min, hi)
     }
-}
-
-/// A label/control row in the settings panel: muted label left, control right.
-fn setting_row(label: &str, control: AnyElement, cx: &mut Context<SdrApp>) -> impl IntoElement {
-    let muted = cx.theme().muted_foreground;
-    div()
-        .flex()
-        .flex_row()
-        .items_center()
-        .justify_between()
-        .h(px(28.))
-        .child(div().text_xs().text_color(muted).child(label.to_string()))
-        .child(control)
 }
 
 /// A centered connection state: searching, no device, or an error with a Retry button.
@@ -565,20 +600,7 @@ fn bottom_pane(cx: &mut Context<SdrApp>) -> impl IntoElement {
         .size_full()
         .border_t_1()
         .border_color(border)
-        .child(
-            div()
-                .flex()
-                .flex_row()
-                .h(px(28.))
-                .items_center()
-                .border_b_1()
-                .border_color(border)
-                .children(
-                    tabs.into_iter()
-                        .enumerate()
-                        .map(|(i, label)| tab(label, i == 0, cx)),
-                ),
-        )
+        .child(tab_strip(&tabs, 0, cx))
         .child(
             div()
                 .flex()
@@ -591,73 +613,6 @@ fn bottom_pane(cx: &mut Context<SdrApp>) -> impl IntoElement {
                 .child("AC123      39000 ft   hdg 270        ADS-B")
                 .child("\"call ext 4471\"                      POCSAG")
                 .child("Acurite 0x3f   21.4 C   58 %RH        433"),
-        )
-}
-
-/// A bottom-pane tab. Active tab is foreground with a raised fill and an accent underline.
-fn tab(label: &'static str, active: bool, cx: &mut Context<SdrApp>) -> impl IntoElement {
-    let foreground = cx.theme().foreground;
-    let muted = cx.theme().muted_foreground;
-    let raised = cx.theme().secondary;
-    let accent = cx.theme().primary;
-
-    div()
-        .flex()
-        .items_center()
-        .h_full()
-        .px_3()
-        .text_xs()
-        .border_b_2()
-        .border_color(if active {
-            accent
-        } else {
-            gpui::transparent_black()
-        })
-        .when(active, |this| this.bg(raised))
-        .text_color(if active { foreground } else { muted })
-        .child(label)
-}
-
-/// A small section header used as the top strip of a panel.
-fn panel_header(label: &'static str, cx: &mut Context<SdrApp>) -> impl IntoElement {
-    let muted = cx.theme().muted_foreground;
-    let border = cx.theme().border;
-
-    div()
-        .flex()
-        .items_center()
-        .h(px(24.))
-        .px_2()
-        .border_b_1()
-        .border_color(border)
-        .text_xs()
-        .text_color(muted)
-        .child(label)
-}
-
-/// An inline section divider/label inside the inspect panel.
-fn section(label: &'static str, cx: &mut Context<SdrApp>) -> impl IntoElement {
-    let muted = cx.theme().muted_foreground;
-    div().pt_2().text_xs().text_color(muted).child(label)
-}
-
-/// A label/value row: muted key on the left, foreground mono value on the right.
-fn kv(key: &'static str, value: &str, cx: &mut Context<SdrApp>) -> impl IntoElement {
-    let foreground = cx.theme().foreground;
-    let muted = cx.theme().muted_foreground;
-    let mono = cx.theme().mono_font_family.clone();
-
-    div()
-        .flex()
-        .flex_row()
-        .justify_between()
-        .text_xs()
-        .child(div().text_color(muted).child(key))
-        .child(
-            div()
-                .font_family(mono)
-                .text_color(foreground)
-                .child(value.to_string()),
         )
 }
 

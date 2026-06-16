@@ -38,10 +38,6 @@ pub const FFT_SIZES: [usize; 5] = [1024, 2048, 4096, 8192, 16384];
 /// The frame rates offered in the settings panel (Hz).
 pub const FPS_CHOICES: [f32; 4] = [15.0, 25.0, 30.0, 60.0];
 
-/// Display-averaging presets, as (EMA weight, label).
-pub const AVG_PRESETS: [(f32, &str); 4] =
-    [(0.0, "Off"), (0.3, "Low"), (0.6, "Med"), (0.85, "High")];
-
 /// Marker-bandwidth presets (Hz).
 pub const BW_PRESETS: [u32; 5] = [50_000, 100_000, 200_000, 500_000, 1_000_000];
 

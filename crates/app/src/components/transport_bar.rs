@@ -1,7 +1,8 @@
 use gpui::*;
-use gpui_component::{ActiveTheme, Icon, IconName};
+use gpui_component::{ActiveTheme, IconName};
 
 use crate::app::SdrApp;
+use crate::ui::{icon_button, inset};
 
 /// Full-width strip for record and replay, present in every workspace so recording is
 /// always one action away: transport controls, the DVR buffer scrubber, buffer depth,
@@ -10,10 +11,9 @@ use crate::app::SdrApp;
 pub fn render(app: &SdrApp, cx: &mut Context<SdrApp>) -> impl IntoElement {
     let background = cx.theme().background;
     let border = cx.theme().border;
-    let foreground = cx.theme().foreground;
     let muted = cx.theme().muted_foreground;
-    let track = cx.theme().secondary;
     let record = cx.theme().danger;
+    let fill = cx.theme().primary;
     let mono = cx.theme().mono_font_family.clone();
 
     let running = app.radio().engine().is_some();
@@ -23,7 +23,6 @@ pub fn render(app: &SdrApp, cx: &mut Context<SdrApp>) -> impl IntoElement {
     } else {
         IconName::Pause
     };
-    let play_color = if running { foreground } else { muted };
 
     div()
         .flex()
@@ -40,37 +39,35 @@ pub fn render(app: &SdrApp, cx: &mut Context<SdrApp>) -> impl IntoElement {
         .text_xs()
         .text_color(muted)
         .child(
-            // Transport: play / stop / record.
+            // Transport: play/pause and the record indicator.
             div()
                 .flex()
                 .flex_row()
                 .items_center()
                 .gap_3()
-                .child(
-                    div()
-                        .id("transport-play")
-                        .cursor_pointer()
-                        .child(Icon::new(play_icon).size_4().text_color(play_color))
-                        .on_click(cx.listener(|app, _, _, cx| app.toggle_pause(cx))),
-                )
-                .child(div().size(px(9.)).bg(muted))
+                .child(icon_button(
+                    "transport-play",
+                    play_icon,
+                    running,
+                    cx,
+                    |app, _, cx| app.toggle_pause(cx),
+                ))
                 .child(
                     div()
                         .flex()
                         .flex_row()
                         .items_center()
                         .gap_1()
-                        .child(div().size(px(8.)).rounded_full().bg(record))
+                        .child(div().size(px(9.)).rounded_full().bg(record))
                         .child("REC"),
                 ),
         )
         .child(
-            // DVR buffer scrubber.
-            div()
+            // DVR buffer scrubber: a near-black well with an orange filled portion.
+            inset(cx)
                 .flex_1()
-                .h(px(4.))
-                .bg(track)
-                .child(div().h_full().w(px(180.)).bg(muted)),
+                .h(px(8.))
+                .child(div().h_full().w(px(180.)).bg(fill)),
         )
         .child("-12s")
         .child("44.1 kHz")
